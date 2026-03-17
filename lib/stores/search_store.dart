@@ -1,3 +1,4 @@
+import 'package:cineby_tv/models/movie_details_model.dart';
 import 'package:cineby_tv/models/search_model.dart';
 import 'package:cineby_tv/services/config.dart';
 import 'package:dio/dio.dart';
@@ -22,6 +23,9 @@ abstract class _SearchStore with Store {
 
   @observable
   String? errorMessage;
+
+  @observable
+  MovieDetails? movieDetails;
 
   @action
   Future<void> setSearchQuery(String query) async {
@@ -63,6 +67,25 @@ abstract class _SearchStore with Store {
         trendingResults = ObservableList.of(searchResponse.results);
       } else {
         errorMessage = 'Failed to load trending results';
+      }
+    } catch (e) {
+      errorMessage = e.toString();
+    } finally {
+      isLoading = false;
+    }
+  }
+
+  @action
+  Future<void> fetchMovieDetails(String id) async {
+    isLoading = true;
+    errorMessage = null;
+    movieDetails = null;
+    try {
+      final response = await Dio().get('$movieDetailUrl$id$movieDetailParams');
+      if (response.statusCode == 200) {
+        movieDetails = MovieDetails.fromJson(response.data);
+      } else {
+        errorMessage = 'Failed to load movie details';
       }
     } catch (e) {
       errorMessage = e.toString();

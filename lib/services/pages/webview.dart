@@ -1,6 +1,7 @@
 import 'dart:collection';
+import 'dart:typed_data';
 import 'package:cineby_tv/services/config.dart';
-import 'package:adblocker_webview/adblocker_webview.dart';
+// import 'package:adblocker_webview/adblocker_webview.dart';
 import 'package:flutter/material.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
@@ -16,9 +17,8 @@ class MyWidget extends StatefulWidget {
 }
 
 class _MyWidgetState extends State<MyWidget> {
-  final _adBlockerWebviewController = AdBlockerWebviewController.instance;
+  // final _adBlockerWebviewController = AdBlockerWebviewController.instance;
   late String _currentUrl;
-  late String _initialHost;
   Key _webViewKey = UniqueKey();
   bool _isLoading = true;
 
@@ -29,17 +29,13 @@ class _MyWidgetState extends State<MyWidget> {
     mediaPlaybackRequiresUserGesture: false,
     allowsInlineMediaPlayback: true,
     iframeAllowFullscreen: true,
-    useWideViewPort: true,
-    loadWithOverviewMode: true,
-    needInitialFocus: true,
-    supportZoom: false,
-    displayZoomControls: false,
-    builtInZoomControls: false,
+    useHybridComposition: true,
     iframeSandbox: {
       Sandbox.ALLOW_FORMS,
-      Sandbox.ALLOW_POINTER_LOCK,
       Sandbox.ALLOW_SAME_ORIGIN,
       Sandbox.ALLOW_SCRIPTS,
+      Sandbox.ALLOW_DOWNLOADS,
+      Sandbox.ALLOW_PRESENTATION,
     },
   );
 
@@ -47,17 +43,16 @@ class _MyWidgetState extends State<MyWidget> {
   void initState() {
     super.initState();
     _currentUrl = widget.url ?? serverurl;
-    _initialHost = WebUri(_currentUrl).host;
-    _initAdBlocker();
+    // _initAdBlocker();
     WakelockPlus.enable();
   }
 
-  Future<void> _initAdBlocker() async {
-    await _adBlockerWebviewController.initialize(
-      FilterConfig(filterTypes: [FilterType.easyList, FilterType.adGuard]),
-      [],
-    );
-  }
+  // Future<void> _initAdBlocker() async {
+  //   await _adBlockerWebviewController.initialize(
+  //     FilterConfig(filterTypes: [FilterType.easyList, FilterType.adGuard]),
+  //     [],
+  //   );
+  // }
 
   @override
   void dispose() {
@@ -136,7 +131,7 @@ class _MyWidgetState extends State<MyWidget> {
                     injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
                   ),
                   UserScript(
-                    forMainFrameOnly: false,
+                    forMainFrameOnly: true,
                     source: """
                     (function() {
                       // 1. Inject Focus Styles
@@ -319,22 +314,14 @@ class _MyWidgetState extends State<MyWidget> {
                   final uri = navigationAction.request.url;
                   if (uri == null) return NavigationActionPolicy.ALLOW;
 
-                  // Lock navigation to the initial host
-                  if (uri.host != _initialHost) {
-                    debugPrint("Blocked cross-origin navigation: ${uri.host}");
-                    return NavigationActionPolicy.CANCEL;
-                  }
+                  // Lock navigation to the initial host - REMOVED for stability
+                  // if (uri.host != _initialHost) {
+                  //   debugPrint("Blocked cross-origin navigation: ${uri.host}");
+                  //   return NavigationActionPolicy.CANCEL;
+                  // }
 
                   if (_isAdUrl(uri.toString())) {
-                    // Block navigation to known ad domains
                     debugPrint("Blocked ad URL: $uri");
-                    if (await controller.canGoBack()) {
-                      controller.goBack();
-                    } else {
-                      setState(() {
-                        _webViewKey = UniqueKey();
-                      });
-                    }
                     return NavigationActionPolicy.CANCEL;
                   }
                   // Update current valid URL
@@ -344,7 +331,8 @@ class _MyWidgetState extends State<MyWidget> {
                 // Optional: Intercept requests to block ad assets
                 shouldInterceptRequest: (controller, request) async {
                   if (_isAdUrl(request.url.toString())) {
-                    return WebResourceResponse();
+                    return WebResourceResponse(
+                        contentType: 'text/plain', statusCode: 204, data: Uint8List(0));
                   }
                   return null;
                 },

@@ -3,6 +3,7 @@
 // import 'package:saas/stores/auth_store.dart';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/material.dart';
 
 const String serverurl = 'https://vidlink.pro/movie/';
 
@@ -11,6 +12,18 @@ const String searchUrl =
 
 const String homeUrl =
     "https://db.videasy.net/3/trending/all/day?region=US&language=en";
+
+const String movieDetailUrl =
+    "https://db.videasy.net/3/movie/";
+const String movieDetailParams =
+    "?append_to_response=credits,external_ids,videos,recommendations,translations,similar,release_dates&language=en&include_video_language=en,null";
+
+// UI Constants
+const Color kNetflixRed = Color(0xFFE50914);
+const Color kDeepBlack = Color(0xFF000000);
+const Color kSurfaceGrey = Color(0xFF141414);
+const Color kTextWhite = Colors.white;
+const Color kTextGrey = Color(0xFFA3A3A3);
 
 const String authServiceUrl = serverurl;
 

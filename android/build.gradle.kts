@@ -4,12 +4,12 @@ buildscript {
         mavenCentral()
     }
     dependencies {
-        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.24")
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.1.0")
     }
 }
 
 allprojects {
-    extra["kotlin_version"] = "1.9.24"
+    extra["kotlin_version"] = "2.1.0"
     repositories {
         google()
         mavenCentral()
@@ -18,7 +18,7 @@ allprojects {
         resolutionStrategy {
             eachDependency {
                 if (requested.group == "org.jetbrains.kotlin") {
-                    useVersion("1.9.24")
+                    useVersion("2.1.0")
                 }
             }
         }
