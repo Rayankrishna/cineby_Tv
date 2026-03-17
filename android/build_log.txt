@@ -1,0 +1,110 @@
+> Task :gradle:checkKotlinGradlePluginConfigurationErrors
+> Task :gradle:compileKotlin UP-TO-DATE
+> Task :gradle:compileJava NO-SOURCE
+> Task :gradle:compileGroovy UP-TO-DATE
+> Task :gradle:pluginDescriptors UP-TO-DATE
+> Task :gradle:processResources UP-TO-DATE
+> Task :gradle:classes UP-TO-DATE
+> Task :gradle:jar UP-TO-DATE
+
+> Configure project :webview_flutter_android
+Your project is configured with Android NDK 26.3.11579264, but the following plugin(s) depend on a different Android NDK version:
+- flutter_inappwebview_android requires Android NDK 27.0.12077973
+- package_info_plus requires Android NDK 27.0.12077973
+- path_provider_android requires Android NDK 27.0.12077973
+- permission_handler_android requires Android NDK 27.0.12077973
+- shared_preferences_android requires Android NDK 27.0.12077973
+- wakelock_plus requires Android NDK 27.0.12077973
+- webview_flutter_android requires Android NDK 27.0.12077973
+Fix this issue by using the highest Android NDK version (they are backward compatible).
+Add the following to /Users/rayankrishna/test/cineby_Tv/android/app/build.gradle.kts:
+
+    android {
+        ndkVersion = "27.0.12077973"
+        ...
+    }
+
+
+> Task :package_info_plus:checkKotlinGradlePluginConfigurationErrors
+> Task :package_info_plus:preBuild UP-TO-DATE
+> Task :package_info_plus:preDebugBuild UP-TO-DATE
+> Task :package_info_plus:generateDebugResValues UP-TO-DATE
+> Task :package_info_plus:generateDebugResources UP-TO-DATE
+> Task :package_info_plus:packageDebugResources UP-TO-DATE
+> Task :package_info_plus:parseDebugLocalResources UP-TO-DATE
+> Task :package_info_plus:generateDebugRFile UP-TO-DATE
+
+> Task :package_info_plus:compileDebugKotlin FAILED
+e: Incompatible classes were found in dependencies. Remove them from the classpath or use '-Xskip-metadata-version-check' to suppress errors
+e: file:///Users/rayankrishna/.gradle/caches/8.10.2/transforms/f4ba7c784cd46dc6b51f14d62c2ec6aa/transformed/jetified-kotlin-stdlib-2.2.0.jar!/META-INF/kotlin-stdlib-jdk7.kotlin_moduleModule was compiled with an incompatible version of Kotlin. The binary version of its metadata is 2.2.0, expected version is 1.9.0.
+e: file:///Users/rayankrishna/.gradle/caches/8.10.2/transforms/f4ba7c784cd46dc6b51f14d62c2ec6aa/transformed/jetified-kotlin-stdlib-2.2.0.jar!/META-INF/kotlin-stdlib-jdk8.kotlin_moduleModule was compiled with an incompatible version of Kotlin. The binary version of its metadata is 2.2.0, expected version is 1.9.0.
+e: file:///Users/rayankrishna/.gradle/caches/8.10.2/transforms/f4ba7c784cd46dc6b51f14d62c2ec6aa/transformed/jetified-kotlin-stdlib-2.2.0.jar!/META-INF/kotlin-stdlib.kotlin_moduleModule was compiled with an incompatible version of Kotlin. The binary version of its metadata is 2.2.0, expected version is 1.9.0.
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:22:9 Class 'kotlin.Unit' was compiled with an incompatible version of Kotlin. The actual metadata version is 2.2.0, but the compiler version 1.9.0 can read versions up to 2.0.0.
+The class is loaded from /Users/rayankrishna/.gradle/caches/8.10.2/transforms/f4ba7c784cd46dc6b51f14d62c2ec6aa/transformed/jetified-kotlin-stdlib-2.2.0.jar!/kotlin/Unit.class
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:23:9 Class 'kotlin.Unit' was compiled with an incompatible version of Kotlin. The actual metadata version is 2.2.0, but the compiler version 1.9.0 can read versions up to 2.0.0.
+The class is loaded from /Users/rayankrishna/.gradle/caches/8.10.2/transforms/f4ba7c784cd46dc6b51f14d62c2ec6aa/transformed/jetified-kotlin-stdlib-2.2.0.jar!/kotlin/Unit.class
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:24:25 Class 'kotlin.Unit' was compiled with an incompatible version of Kotlin. The actual metadata version is 2.2.0, but the compiler version 1.9.0 can read versions up to 2.0.0.
+The class is loaded from /Users/rayankrishna/.gradle/caches/8.10.2/transforms/f4ba7c784cd46dc6b51f14d62c2ec6aa/transformed/jetified-kotlin-stdlib-2.2.0.jar!/kotlin/Unit.class
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:28:9 Class 'kotlin.Unit' was compiled with an incompatible version of Kotlin. The actual metadata version is 2.2.0, but the compiler version 1.9.0 can read versions up to 2.0.0.
+The class is loaded from /Users/rayankrishna/.gradle/caches/8.10.2/transforms/f4ba7c784cd46dc6b51f14d62c2ec6aa/transformed/jetified-kotlin-stdlib-2.2.0.jar!/kotlin/Unit.class
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:29:25 Class 'kotlin.Unit' was compiled with an incompatible version of Kotlin. The actual metadata version is 2.2.0, but the compiler version 1.9.0 can read versions up to 2.0.0.
+The class is loaded from /Users/rayankrishna/.gradle/caches/8.10.2/transforms/f4ba7c784cd46dc6b51f14d62c2ec6aa/transformed/jetified-kotlin-stdlib-2.2.0.jar!/kotlin/Unit.class
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:30:9 Class 'kotlin.Unit' was compiled with an incompatible version of Kotlin. The actual metadata version is 2.2.0, but the compiler version 1.9.0 can read versions up to 2.0.0.
+The class is loaded from /Users/rayankrishna/.gradle/caches/8.10.2/transforms/f4ba7c784cd46dc6b51f14d62c2ec6aa/transformed/jetified-kotlin-stdlib-2.2.0.jar!/kotlin/Unit.class
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:34:9 Class 'kotlin.Unit' was compiled with an incompatible version of Kotlin. The actual metadata version is 2.2.0, but the compiler version 1.9.0 can read versions up to 2.0.0.
+The class is loaded from /Users/rayankrishna/.gradle/caches/8.10.2/transforms/f4ba7c784cd46dc6b51f14d62c2ec6aa/transformed/jetified-kotlin-stdlib-2.2.0.jar!/kotlin/Unit.class
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:35:13 Class 'kotlin.Unit' was compiled with an incompatible version of Kotlin. The actual metadata version is 2.2.0, but the compiler version 1.9.0 can read versions up to 2.0.0.
+The class is loaded from /Users/rayankrishna/.gradle/caches/8.10.2/transforms/f4ba7c784cd46dc6b51f14d62c2ec6aa/transformed/jetified-kotlin-stdlib-2.2.0.jar!/kotlin/Unit.class
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:46:31 Unresolved reference: HashMap
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:48:21 Unresolved reference: put
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:49:21 Unresolved reference: put
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:50:21 Unresolved reference: put
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:51:21 Unresolved reference: put
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:52:49 Unresolved reference: put
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:53:51 Unresolved reference: put
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:54:21 Unresolved reference: put
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:55:21 Unresolved reference: put
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:56:26 Cannot infer a type for this parameter. Please specify it explicitly.
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:57:28 Class 'kotlin.Unit' was compiled with an incompatible version of Kotlin. The actual metadata version is 2.2.0, but the compiler version 1.9.0 can read versions up to 2.0.0.
+The class is loaded from /Users/rayankrishna/.gradle/caches/8.10.2/transforms/f4ba7c784cd46dc6b51f14d62c2ec6aa/transformed/jetified-kotlin-stdlib-2.2.0.jar!/kotlin/Unit.class
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:60:24 Class 'kotlin.Unit' was compiled with an incompatible version of Kotlin. The actual metadata version is 2.2.0, but the compiler version 1.9.0 can read versions up to 2.0.0.
+The class is loaded from /Users/rayankrishna/.gradle/caches/8.10.2/transforms/f4ba7c784cd46dc6b51f14d62c2ec6aa/transformed/jetified-kotlin-stdlib-2.2.0.jar!/kotlin/Unit.class
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:63:20 Class 'kotlin.Unit' was compiled with an incompatible version of Kotlin. The actual metadata version is 2.2.0, but the compiler version 1.9.0 can read versions up to 2.0.0.
+The class is loaded from /Users/rayankrishna/.gradle/caches/8.10.2/transforms/f4ba7c784cd46dc6b51f14d62c2ec6aa/transformed/jetified-kotlin-stdlib-2.2.0.jar!/kotlin/Unit.class
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:77:14 Class 'kotlin.Suppress' was compiled with an incompatible version of Kotlin. The actual metadata version is 2.2.0, but the compiler version 1.9.0 can read versions up to 2.0.0.
+The class is loaded from /Users/rayankrishna/.gradle/caches/8.10.2/transforms/f4ba7c784cd46dc6b51f14d62c2ec6aa/transformed/jetified-kotlin-stdlib-2.2.0.jar!/kotlin/Suppress.class
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:82:6 Class 'kotlin.Suppress' was compiled with an incompatible version of Kotlin. The actual metadata version is 2.2.0, but the compiler version 1.9.0 can read versions up to 2.0.0.
+The class is loaded from /Users/rayankrishna/.gradle/caches/8.10.2/transforms/f4ba7c784cd46dc6b51f14d62c2ec6aa/transformed/jetified-kotlin-stdlib-2.2.0.jar!/kotlin/Suppress.class
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:91:6 Class 'kotlin.Suppress' was compiled with an incompatible version of Kotlin. The actual metadata version is 2.2.0, but the compiler version 1.9.0 can read versions up to 2.0.0.
+The class is loaded from /Users/rayankrishna/.gradle/caches/8.10.2/transforms/f4ba7c784cd46dc6b51f14d62c2ec6aa/transformed/jetified-kotlin-stdlib-2.2.0.jar!/kotlin/Suppress.class
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:102:70 Unresolved reference: first
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:104:77 Unresolved reference: first
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:113:32 Unresolved reference: isNullOrEmpty
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:113:62 Unresolved reference: first
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:116:50 Unresolved reference: first
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:127:6 Class 'kotlin.jvm.Throws' was compiled with an incompatible version of Kotlin. The actual metadata version is 2.2.0, but the compiler version 1.9.0 can read versions up to 2.0.0.
+The class is loaded from /Users/rayankrishna/.gradle/caches/8.10.2/transforms/f4ba7c784cd46dc6b51f14d62c2ec6aa/transformed/jetified-kotlin-stdlib-2.2.0.jar!/kotlin/jvm/Throws.class
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:130:16 Class 'kotlin.Unit' was compiled with an incompatible version of Kotlin. The actual metadata version is 2.2.0, but the compiler version 1.9.0 can read versions up to 2.0.0.
+The class is loaded from /Users/rayankrishna/.gradle/caches/8.10.2/transforms/f4ba7c784cd46dc6b51f14d62c2ec6aa/transformed/jetified-kotlin-stdlib-2.2.0.jar!/kotlin/Unit.class
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:142:25 Unresolved reference: indices
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:144:13 Class 'kotlin.Unit' was compiled with an incompatible version of Kotlin. The actual metadata version is 2.2.0, but the compiler version 1.9.0 can read versions up to 2.0.0.
+The class is loaded from /Users/rayankrishna/.gradle/caches/8.10.2/transforms/f4ba7c784cd46dc6b51f14d62c2ec6aa/transformed/jetified-kotlin-stdlib-2.2.0.jar!/kotlin/Unit.class
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:145:13 Class 'kotlin.Unit' was compiled with an incompatible version of Kotlin. The actual metadata version is 2.2.0, but the compiler version 1.9.0 can read versions up to 2.0.0.
+The class is loaded from /Users/rayankrishna/.gradle/caches/8.10.2/transforms/f4ba7c784cd46dc6b51f14d62c2ec6aa/transformed/jetified-kotlin-stdlib-2.2.0.jar!/kotlin/Unit.class
+e: file:///Users/rayankrishna/.pub-cache/hosted/pub.dev/package_info_plus-9.0.0/android/src/main/kotlin/dev/fluttercommunity/plus/packageinfo/PackageInfoPlugin.kt:147:23 Too many arguments for public constructor String() defined in kotlin.String
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':package_info_plus:compileDebugKotlin'.
+> A failure occurred while executing org.jetbrains.kotlin.compilerRunner.GradleCompilerRunnerWithWorkers$GradleKotlinCompilerWorkAction
+   > Compilation error. See log for more details
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights.
+> Get more help at https://help.gradle.org.
+
+BUILD FAILED in 904ms
+13 actionable tasks: 3 executed, 10 up-to-date

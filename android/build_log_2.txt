@@ -1,0 +1,39 @@
+> Task :gradle:checkKotlinGradlePluginConfigurationErrors
+> Task :gradle:compileKotlin UP-TO-DATE
+> Task :gradle:compileJava NO-SOURCE
+> Task :gradle:compileGroovy UP-TO-DATE
+> Task :gradle:pluginDescriptors UP-TO-DATE
+> Task :gradle:processResources UP-TO-DATE
+> Task :gradle:classes UP-TO-DATE
+> Task :gradle:jar UP-TO-DATE
+
+> Configure project :webview_flutter_android
+Your project is configured with Android NDK 26.3.11579264, but the following plugin(s) depend on a different Android NDK version:
+- flutter_inappwebview_android requires Android NDK 27.0.12077973
+- package_info_plus requires Android NDK 27.0.12077973
+- path_provider_android requires Android NDK 27.0.12077973
+- permission_handler_android requires Android NDK 27.0.12077973
+- shared_preferences_android requires Android NDK 27.0.12077973
+- wakelock_plus requires Android NDK 27.0.12077973
+- webview_flutter_android requires Android NDK 27.0.12077973
+Fix this issue by using the highest Android NDK version (they are backward compatible).
+Add the following to /Users/rayankrishna/test/cineby_Tv/android/app/build.gradle.kts:
+
+    android {
+        ndkVersion = "27.0.12077973"
+        ...
+    }
+
+
+> Task :package_info_plus:checkKotlinGradlePluginConfigurationErrors
+> Task :package_info_plus:preBuild UP-TO-DATE
+> Task :package_info_plus:preDebugBuild UP-TO-DATE
+> Task :package_info_plus:generateDebugResValues
+> Task :package_info_plus:generateDebugResources
+> Task :package_info_plus:packageDebugResources
+> Task :package_info_plus:parseDebugLocalResources
+> Task :package_info_plus:generateDebugRFile
+> Task :package_info_plus:compileDebugKotlin
+
+BUILD SUCCESSFUL in 4s
+13 actionable tasks: 8 executed, 5 up-to-date
