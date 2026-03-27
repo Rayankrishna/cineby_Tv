@@ -30,6 +30,10 @@ class _MyWidgetState extends State<MyWidget> {
     allowsInlineMediaPlayback: true,
     iframeAllowFullscreen: true,
     useHybridComposition: true,
+    preferredContentMode: UserPreferredContentMode.DESKTOP, // Forces desktop layout to fix 4K TV scaling
+    useWideViewPort: true, // Use a wide viewport
+    loadWithOverviewMode: true, // Overview mode to fit the screen
+    textZoom: 100, // Prevent system font scaling issues in WebView on TV
     iframeSandbox: {
       Sandbox.ALLOW_FORMS,
       Sandbox.ALLOW_SAME_ORIGIN,

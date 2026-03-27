@@ -52,10 +52,11 @@ class _MovieDetailsPageState extends State<MovieDetailsPage> {
 
           return CustomScrollView(
             slivers: [
-              // Hero Section with Backdrop
               SliverToBoxAdapter(
                 child: Container(
-                  height: MediaQuery.of(context).size.height * 0.8,
+                  constraints: BoxConstraints(
+                    minHeight: MediaQuery.of(context).size.height * 0.8,
+                  ),
                   child: Stack(
                     children: [
                       // Backdrop Image
@@ -100,11 +101,11 @@ class _MovieDetailsPageState extends State<MovieDetailsPage> {
                         ),
                       ),
                       // Movie Content
-                      Positioned(
-                        left: 60,
-                        top: 100,
+                      Padding(
+                        padding: const EdgeInsets.only(left: 60, top: 100, bottom: 40, right: 60),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
                           children: [
                             Text(
                               movie.title?.toUpperCase() ?? 'UNTITLED',
@@ -167,7 +168,7 @@ class _MovieDetailsPageState extends State<MovieDetailsPage> {
                               width: MediaQuery.of(context).size.width * 0.45,
                               child: Text(
                                 movie.overview ?? '',
-                                maxLines: 5,
+                                maxLines: 8,
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(
                                   color: kTextWhite,
