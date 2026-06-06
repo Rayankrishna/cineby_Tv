@@ -63,6 +63,78 @@ mixin _$SearchStore on _SearchStore, Store {
     });
   }
 
+  late final _$trendingResultsAtom = Atom(
+    name: '_SearchStore.trendingResults',
+    context: context,
+  );
+
+  @override
+  ObservableList<SearchResult> get trendingResults {
+    _$trendingResultsAtom.reportRead();
+    return super.trendingResults;
+  }
+
+  @override
+  set trendingResults(ObservableList<SearchResult> value) {
+    _$trendingResultsAtom.reportWrite(value, super.trendingResults, () {
+      super.trendingResults = value;
+    });
+  }
+
+  late final _$topMoviesAtom = Atom(
+    name: '_SearchStore.topMovies',
+    context: context,
+  );
+
+  @override
+  ObservableList<SearchResult> get topMovies {
+    _$topMoviesAtom.reportRead();
+    return super.topMovies;
+  }
+
+  @override
+  set topMovies(ObservableList<SearchResult> value) {
+    _$topMoviesAtom.reportWrite(value, super.topMovies, () {
+      super.topMovies = value;
+    });
+  }
+
+  late final _$topSeriesAtom = Atom(
+    name: '_SearchStore.topSeries',
+    context: context,
+  );
+
+  @override
+  ObservableList<SearchResult> get topSeries {
+    _$topSeriesAtom.reportRead();
+    return super.topSeries;
+  }
+
+  @override
+  set topSeries(ObservableList<SearchResult> value) {
+    _$topSeriesAtom.reportWrite(value, super.topSeries, () {
+      super.topSeries = value;
+    });
+  }
+
+  late final _$topAnimeAtom = Atom(
+    name: '_SearchStore.topAnime',
+    context: context,
+  );
+
+  @override
+  ObservableList<SearchResult> get topAnime {
+    _$topAnimeAtom.reportRead();
+    return super.topAnime;
+  }
+
+  @override
+  set topAnime(ObservableList<SearchResult> value) {
+    _$topAnimeAtom.reportWrite(value, super.topAnime, () {
+      super.topAnime = value;
+    });
+  }
+
   late final _$errorMessageAtom = Atom(
     name: '_SearchStore.errorMessage',
     context: context,
@@ -78,6 +150,24 @@ mixin _$SearchStore on _SearchStore, Store {
   set errorMessage(String? value) {
     _$errorMessageAtom.reportWrite(value, super.errorMessage, () {
       super.errorMessage = value;
+    });
+  }
+
+  late final _$movieDetailsAtom = Atom(
+    name: '_SearchStore.movieDetails',
+    context: context,
+  );
+
+  @override
+  MovieDetails? get movieDetails {
+    _$movieDetailsAtom.reportRead();
+    return super.movieDetails;
+  }
+
+  @override
+  set movieDetails(MovieDetails? value) {
+    _$movieDetailsAtom.reportWrite(value, super.movieDetails, () {
+      super.movieDetails = value;
     });
   }
 
@@ -103,13 +193,42 @@ mixin _$SearchStore on _SearchStore, Store {
     );
   }
 
+  late final _$fetchTrendingResultsAsyncAction = AsyncAction(
+    '_SearchStore.fetchTrendingResults',
+    context: context,
+  );
+
+  @override
+  Future<void> fetchTrendingResults() {
+    return _$fetchTrendingResultsAsyncAction.run(
+      () => super.fetchTrendingResults(),
+    );
+  }
+
+  late final _$fetchMovieDetailsAsyncAction = AsyncAction(
+    '_SearchStore.fetchMovieDetails',
+    context: context,
+  );
+
+  @override
+  Future<void> fetchMovieDetails(String id) {
+    return _$fetchMovieDetailsAsyncAction.run(
+      () => super.fetchMovieDetails(id),
+    );
+  }
+
   @override
   String toString() {
     return '''
 searchQuery: ${searchQuery},
 isLoading: ${isLoading},
 searchResults: ${searchResults},
-errorMessage: ${errorMessage}
+trendingResults: ${trendingResults},
+topMovies: ${topMovies},
+topSeries: ${topSeries},
+topAnime: ${topAnime},
+errorMessage: ${errorMessage},
+movieDetails: ${movieDetails}
     ''';
   }
 }

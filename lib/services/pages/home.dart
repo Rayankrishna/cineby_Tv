@@ -1,16 +1,16 @@
+import 'package:cineby_tv/models/history_item.dart';
+import 'package:cineby_tv/models/search_model.dart';
 import 'package:cineby_tv/services/config.dart';
-import 'package:cineby_tv/services/pages/webview.dart';
-import 'package:cineby_tv/services/pages/search.dart';
 import 'package:cineby_tv/services/pages/details.dart';
-
 import 'package:cineby_tv/stores/search_store.dart';
+import 'package:cineby_tv/stores/stores.dart';
+import 'package:cineby_tv/utils/tv_scale.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_mobx/flutter_mobx.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_mobx/flutter_mobx.dart';
 
 class MyHomePage extends StatefulWidget {
   const MyHomePage({super.key, required this.title});
-
   final String title;
 
   @override
@@ -24,196 +24,228 @@ class _MyHomePageState extends State<MyHomePage> {
   void initState() {
     super.initState();
     _searchStore.fetchTrendingResults();
-  }
-
-  @override
-  void dispose() {
-    super.dispose();
+    historyStore.fetchContinueWatching();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: kDeepBlack,
-      body: Observer(
+    return Container(
+      color: kDeepBlack,
+      child: Observer(
         builder: (_) {
-          if (_searchStore.isLoading &&
-              _searchStore.searchResults.isEmpty &&
-              _searchStore.trendingResults.isEmpty) {
+          final stillLoading = _searchStore.isLoading &&
+              _searchStore.trendingResults.isEmpty &&
+              _searchStore.topMovies.isEmpty;
+          if (stillLoading) {
             return const Center(child: CircularProgressIndicator(color: kNetflixRed));
           }
-
-          if (_searchStore.errorMessage != null) {
-            return Center(child: Text(_searchStore.errorMessage!, style: const TextStyle(color: kTextWhite)));
+          if (_searchStore.errorMessage != null && _searchStore.trendingResults.isEmpty) {
+            return Center(
+              child: Text(
+                _searchStore.errorMessage!,
+                style: TextStyle(color: kTextWhite, fontSize: 14.s(context)),
+              ),
+            );
           }
-
           final trending = _searchStore.trendingResults;
-          if (trending.isEmpty) {
-            return const Center(child: Text("No content available", style: TextStyle(color: kTextWhite)));
-          }
-
-          final heroMovie = trending.first;
+          final hero = trending.isNotEmpty ? trending.first : null;
 
           return CustomScrollView(
             slivers: [
-              // Hero Section
-              SliverToBoxAdapter(
-                child: Container(
-                  height: MediaQuery.of(context).size.height * 0.7,
-                  width: double.infinity,
-                  child: Stack(
-                    children: [
-                      // Hero Background Image with Gradient
-                      Positioned.fill(
-                        child: ShaderMask(
-                          shaderCallback: (rect) {
-                            return LinearGradient(
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                              colors: [
-                                Colors.black.withOpacity(0.0),
-                                Colors.black.withOpacity(0.5),
-                                kDeepBlack,
-                              ],
-                              stops: const [0, 0.5, 1.0],
-                            ).createShader(rect);
-                          },
-                          blendMode: BlendMode.dstIn,
-                          child: heroMovie.posterPath != null
-                              ? Image.network(
-                                  "https://image.tmdb.org/t/p/original${heroMovie.posterPath}",
-                                  fit: BoxFit.cover,
-                                )
-                              : Container(color: kSurfaceGrey),
-                        ),
-                      ),
-                      // Hero Info
-                      Positioned(
-                        left: 40,
-                        bottom: 40,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              (heroMovie.title ?? heroMovie.name ?? 'Featured Content').toUpperCase(),
-                              style: const TextStyle(
-                                color: kTextWhite,
-                                fontSize: 48,
-                                fontWeight: FontWeight.bold,
-                                letterSpacing: 2,
-                              ),
-                            ),
-                            const SizedBox(height: 10),
-                            SizedBox(
-                              width: MediaQuery.of(context).size.width * 0.4,
-                              child: Text(
-                                heroMovie.overview ?? '',
-                                maxLines: 3,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  color: kTextGrey,
-                                  fontSize: 18,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 30),
-                            Row(
-                              children: [
-                                _HeroButton(
-                                  label: 'Play',
-                                  icon: Icons.play_arrow,
-                                  isPrimary: true,
-                                  onPressed: () => _navigateToWebview(context, heroMovie.id.toString()),
-                                ),
-                                const SizedBox(width: 20),
-                                  _HeroButton(
-                                    label: 'Details',
-                                    icon: Icons.info_outline,
-                                    isPrimary: false,
-                                    onPressed: () => _navigateToDetails(context, heroMovie.id.toString()),
-                                  ),
-                                  const SizedBox(width: 20),
-                                  _HeroButton(
-                                    label: 'Search',
-                                    icon: Icons.search,
-                                    isPrimary: false,
-                                    onPressed: () {
-                                      Navigator.push(
-                                        context,
-                                        MaterialPageRoute(builder: (context) => const SearchPage()),
-                                      );
-                                    },
-                                  ),
-                                ],
-                              ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
+              if (hero != null) SliverToBoxAdapter(child: _Hero(item: hero)),
+              if (historyStore.continueWatching.isNotEmpty)
+                _SliverHistoryRow(
+                  title: 'Continue Watching',
+                  items: historyStore.continueWatching,
                 ),
-              ),
-              // Content Rows
-              _buildRow(context, "Trending Now", trending),
-              _buildRow(context, "Popular on Cineby", trending.reversed.toList()),
-              _buildRow(context, "New Releases", trending.skip(5).toList()),
-              const SliverPadding(padding: EdgeInsets.only(bottom: 40)),
+              if (trending.isNotEmpty)
+                _SliverRow(title: 'Trending Now', items: trending, defaultMediaType: 'movie'),
+              if (_searchStore.topMovies.isNotEmpty)
+                _SliverRow(
+                  title: 'Popular Movies',
+                  items: _searchStore.topMovies,
+                  defaultMediaType: 'movie',
+                ),
+              if (_searchStore.topSeries.isNotEmpty)
+                _SliverRow(
+                  title: 'Popular TV Shows',
+                  items: _searchStore.topSeries,
+                  defaultMediaType: 'tv',
+                ),
+              if (_searchStore.topAnime.isNotEmpty)
+                _SliverRow(
+                  title: 'Anime',
+                  items: _searchStore.topAnime,
+                  defaultMediaType: 'tv',
+                ),
+              SliverPadding(padding: EdgeInsets.only(bottom: 60.s(context))),
             ],
           );
         },
       ),
     );
   }
+}
 
-  void _navigateToWebview(BuildContext context, String id) {
+// ============== HERO ==============
+class _Hero extends StatelessWidget {
+  final SearchResult item;
+  const _Hero({required this.item});
+
+  String get _mediaType => item.mediaType ?? 'movie';
+
+  void _openDetails(BuildContext context) {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => MyWidget(url: "$serverurl$id"),
+        builder: (_) => MovieDetailsPage(
+          movieId: item.id.toString(),
+          mediaType: _mediaType,
+        ),
       ),
     );
   }
 
-  void _navigateToDetails(BuildContext context, String id) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => MovieDetailsPage(movieId: id),
-      ),
-    );
-  }
-
-  Widget _buildRow(BuildContext context, String title, List results) {
-    if (results.isEmpty) return const SliverToBoxAdapter(child: SizedBox.shrink());
-    
-    return SliverToBoxAdapter(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+  @override
+  Widget build(BuildContext context) {
+    final size = MediaQuery.of(context).size;
+    return SizedBox(
+      height: size.height * 0.62,
+      width: double.infinity,
+      child: Stack(
+        fit: StackFit.expand,
         children: [
-          Padding(
-            padding: const EdgeInsets.only(left: 40, top: 30, bottom: 10),
-            child: Text(
-              title,
-              style: const TextStyle(
-                color: kTextWhite,
-                fontSize: 22,
-                fontWeight: FontWeight.bold,
+          // Backdrop
+          if (item.backdropPath != null || item.posterPath != null)
+            Image.network(
+              '$imgOriginal${item.backdropPath ?? item.posterPath}',
+              fit: BoxFit.cover,
+            )
+          else
+            Container(color: kSurfaceGrey),
+          // Bottom fade-to-black
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.transparent,
+                    kDeepBlack.withOpacity(0.4),
+                    kDeepBlack,
+                  ],
+                  stops: const [0.5, 0.85, 1.0],
+                ),
               ),
             ),
           ),
-          SizedBox(
-            height: 220,
-            child: ListView.builder(
-              padding: const EdgeInsets.symmetric(horizontal: 30),
-              scrollDirection: Axis.horizontal,
-              itemCount: results.length,
-              itemBuilder: (context, index) {
-                final result = results[index];
-                return _MovieCard(
-                  result: result,
-                  onPressed: () => _navigateToDetails(context, result.id.toString()),
-                );
-              },
+          // Left fade for readable text
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.centerLeft,
+                  end: Alignment.centerRight,
+                  colors: [
+                    kDeepBlack.withOpacity(0.7),
+                    Colors.transparent,
+                  ],
+                  stops: const [0, 0.6],
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            left: 40.s(context),
+            right: 40.s(context),
+            bottom: 40.s(context),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: 6.s(context),
+                        vertical: 1.s(context),
+                      ),
+                      decoration: BoxDecoration(
+                        border: Border.all(color: kNetflixRed, width: 2.s(context)),
+                      ),
+                      child: Text(
+                        'R',
+                        style: TextStyle(
+                          color: kNetflixRed,
+                          fontSize: 11.s(context),
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                    SizedBox(width: 8.s(context)),
+                    Text(
+                      _mediaType == 'tv' ? 'SERIES' : 'FILM',
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontSize: 11.s(context),
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 3.s(context),
+                      ),
+                    ),
+                  ],
+                ),
+                SizedBox(height: 12.s(context)),
+                Text(
+                  item.title ?? item.name ?? 'Featured',
+                  style: TextStyle(
+                    color: kTextWhite,
+                    fontSize: 64.s(context),
+                    fontWeight: FontWeight.w900,
+                    height: 1.0,
+                    letterSpacing: -1.0.s(context),
+                    shadows: [
+                      Shadow(
+                        color: Colors.black.withOpacity(0.7),
+                        blurRadius: 16.s(context),
+                      ),
+                    ],
+                  ),
+                ),
+                SizedBox(height: 16.s(context)),
+                SizedBox(
+                  width: size.width * 0.45,
+                  child: Text(
+                    item.overview ?? '',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: kTextWhite,
+                      fontSize: 15.s(context),
+                      height: 1.4,
+                      shadows: [
+                        Shadow(
+                          color: Colors.black.withOpacity(0.6),
+                          blurRadius: 8.s(context),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                SizedBox(height: 22.s(context)),
+                Row(
+                  children: [
+                    _HeroPlayButton(
+                      autofocus: true,
+                      onPressed: () => _openDetails(context),
+                    ),
+                    SizedBox(width: 12.s(context)),
+                    _HeroInfoButton(
+                      onPressed: () => _openDetails(context),
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
         ],
@@ -222,123 +254,481 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 }
 
-class _HeroButton extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final bool isPrimary;
-  final VoidCallback onPressed;
+void _scrollToTop(BuildContext context) {
+  final position = Scrollable.maybeOf(context)?.position;
+  if (position == null) return;
+  if (position.pixels <= 0.5) return; // already there
+  position.animateTo(
+    0.0,
+    duration: const Duration(milliseconds: 320),
+    curve: Curves.easeOut,
+  );
+}
 
-  const _HeroButton({
-    required this.label,
-    required this.icon,
-    required this.isPrimary,
-    required this.onPressed,
-  });
+class _HeroPlayButton extends StatelessWidget {
+  final bool autofocus;
+  final VoidCallback onPressed;
+  const _HeroPlayButton({required this.autofocus, required this.onPressed});
 
   @override
   Widget build(BuildContext context) {
     return Focus(
-      onKeyEvent: (node, event) {
-        if (event is KeyDownEvent &&
-            (event.logicalKey == LogicalKeyboardKey.select ||
-                event.logicalKey == LogicalKeyboardKey.enter ||
-                event.logicalKey == LogicalKeyboardKey.space)) {
+      autofocus: autofocus,
+      onFocusChange: (f) {
+        if (!f) return;
+        _scrollToTop(context);
+      },
+      onKeyEvent: (n, e) {
+        if (e is KeyDownEvent &&
+            (e.logicalKey == LogicalKeyboardKey.select ||
+                e.logicalKey == LogicalKeyboardKey.enter ||
+                e.logicalKey == LogicalKeyboardKey.space)) {
           onPressed();
           return KeyEventResult.handled;
         }
         return KeyEventResult.ignored;
       },
-      child: Builder(
-        builder: (context) {
-          final hasFocus = Focus.of(context).hasFocus;
-          return GestureDetector(
-            onTap: onPressed,
+      child: Builder(builder: (ctx) {
+        final focused = Focus.of(ctx).hasFocus;
+        return GestureDetector(
+          onTap: onPressed,
+          child: AnimatedScale(
+            duration: const Duration(milliseconds: 150),
+            curve: Curves.easeOutCubic,
+            scale: focused ? 1.06 : 1.0,
             child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              duration: const Duration(milliseconds: 150),
+              curve: Curves.easeOutCubic,
+              padding: EdgeInsets.symmetric(
+                horizontal: 26.s(context),
+                vertical: 12.s(context),
+              ),
               decoration: BoxDecoration(
-                color: isPrimary 
-                    ? (hasFocus ? Colors.white : Colors.white.withOpacity(0.9))
-                    : (hasFocus ? Colors.grey.withOpacity(0.5) : Colors.grey.withOpacity(0.3)),
-                borderRadius: BorderRadius.circular(4),
-                border: hasFocus ? Border.all(color: Colors.blue, width: 3) : null,
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(4.s(context)),
+                border: Border.all(
+                  color: focused ? kNetflixRed : Colors.transparent,
+                  width: 3.s(context),
+                ),
+                boxShadow: focused
+                    ? [
+                        BoxShadow(
+                          color: kNetflixRed.withOpacity(0.55),
+                          blurRadius: 28.s(context),
+                          spreadRadius: 1.s(context),
+                        ),
+                      ]
+                    : [],
               ),
               child: Row(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(icon, color: isPrimary ? Colors.black : Colors.white, size: 28),
-                  const SizedBox(width: 8),
+                  Icon(Icons.play_arrow, color: Colors.black, size: 26.s(context)),
+                  SizedBox(width: 6.s(context)),
                   Text(
-                    label,
+                    'Play',
                     style: TextStyle(
-                      color: isPrimary ? Colors.black : Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
+                      color: Colors.black,
+                      fontSize: 17.s(context),
+                      fontWeight: FontWeight.w800,
                     ),
                   ),
                 ],
               ),
             ),
-          );
-        },
+          ),
+        );
+      }),
+    );
+  }
+}
+
+class _HeroInfoButton extends StatelessWidget {
+  final VoidCallback onPressed;
+  const _HeroInfoButton({required this.onPressed});
+
+  @override
+  Widget build(BuildContext context) {
+    return Focus(
+      onFocusChange: (f) {
+        if (!f) return;
+        _scrollToTop(context);
+      },
+      onKeyEvent: (n, e) {
+        if (e is KeyDownEvent &&
+            (e.logicalKey == LogicalKeyboardKey.select ||
+                e.logicalKey == LogicalKeyboardKey.enter ||
+                e.logicalKey == LogicalKeyboardKey.space)) {
+          onPressed();
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
+      child: Builder(builder: (ctx) {
+        final focused = Focus.of(ctx).hasFocus;
+        return GestureDetector(
+          onTap: onPressed,
+          child: AnimatedScale(
+            duration: const Duration(milliseconds: 150),
+            curve: Curves.easeOutCubic,
+            scale: focused ? 1.06 : 1.0,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              curve: Curves.easeOutCubic,
+              padding: EdgeInsets.symmetric(
+                horizontal: 26.s(context),
+                vertical: 12.s(context),
+              ),
+              decoration: BoxDecoration(
+                color: focused
+                    ? Colors.white.withOpacity(0.28)
+                    : Colors.white.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(4.s(context)),
+                border: Border.all(
+                  color: focused ? kTextWhite : Colors.transparent,
+                  width: 3.s(context),
+                ),
+                boxShadow: focused
+                    ? [
+                        BoxShadow(
+                          color: Colors.white.withOpacity(0.25),
+                          blurRadius: 24.s(context),
+                          spreadRadius: 1.s(context),
+                        ),
+                      ]
+                    : [],
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.info_outline, color: Colors.white, size: 22.s(context)),
+                  SizedBox(width: 8.s(context)),
+                  Text(
+                    'More Info',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 17.s(context),
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      }),
+    );
+  }
+}
+
+// ============== ROWS ==============
+class _SliverRow extends StatelessWidget {
+  final String title;
+  final List<SearchResult> items;
+  final String defaultMediaType;
+  const _SliverRow({
+    required this.title,
+    required this.items,
+    required this.defaultMediaType,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SliverToBoxAdapter(
+      child: Padding(
+        padding: EdgeInsets.only(top: 28.s(context)),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: EdgeInsets.only(
+                left: 40.s(context),
+                bottom: 10.s(context),
+              ),
+              child: Text(
+                title,
+                style: TextStyle(
+                  color: kTextWhite,
+                  fontSize: 18.s(context),
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.2.s(context),
+                ),
+              ),
+            ),
+            SizedBox(
+              // Headroom for the focused card's 1.15x scale (198 -> ~228).
+              height: 234.s(context),
+              child: ListView.builder(
+                padding: EdgeInsets.symmetric(horizontal: 40.s(context)),
+                scrollDirection: Axis.horizontal,
+                // Don't clip — let the focused card scale up (and cast its
+                // shadow) in both dimensions instead of having the height cut.
+                clipBehavior: Clip.none,
+                itemCount: items.length,
+                itemBuilder: (ctx, i) {
+                  final item = items[i];
+                  // Column centers the card vertically and passes a loose
+                  // height constraint, so the card keeps its 198px height
+                  // and scales into the row's headroom rather than filling it.
+                  return Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      _PosterCard(
+                        posterPath: item.posterPath,
+                        fallbackLabel: item.title ?? item.name,
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => MovieDetailsPage(
+                                movieId: item.id.toString(),
+                                mediaType: item.mediaType ?? defaultMediaType,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-class _MovieCard extends StatelessWidget {
-  final dynamic result;
+class _SliverHistoryRow extends StatelessWidget {
+  final String title;
+  final List<HistoryItem> items;
+  const _SliverHistoryRow({required this.title, required this.items});
+
+  @override
+  Widget build(BuildContext context) {
+    return SliverToBoxAdapter(
+      child: Padding(
+        padding: EdgeInsets.only(top: 28.s(context)),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: EdgeInsets.only(
+                left: 40.s(context),
+                bottom: 10.s(context),
+              ),
+              child: Text(
+                title,
+                style: TextStyle(
+                  color: kTextWhite,
+                  fontSize: 18.s(context),
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.2.s(context),
+                ),
+              ),
+            ),
+            SizedBox(
+              // Headroom for the focused card's 1.15x scale (198 -> ~228).
+              height: 234.s(context),
+              child: ListView.builder(
+                padding: EdgeInsets.symmetric(horizontal: 40.s(context)),
+                scrollDirection: Axis.horizontal,
+                // Don't clip — let the focused card scale up (and cast its
+                // shadow) in both dimensions instead of having the height cut.
+                clipBehavior: Clip.none,
+                itemCount: items.length,
+                itemBuilder: (ctx, i) {
+                  final h = items[i];
+                  // Column centers the card vertically and passes a loose
+                  // height constraint, so the card keeps its 198px height
+                  // and scales into the row's headroom rather than filling it.
+                  return Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      _PosterCard(
+                        posterPath: h.posterPath ?? h.backdropPath,
+                        fallbackLabel: h.title,
+                        progress: h.progressFraction,
+                        badge: h.mediaType == 'tv' && h.seasonNumber != null && h.episodeNumber != null
+                            ? 'S${h.seasonNumber}·E${h.episodeNumber}'
+                            : null,
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => MovieDetailsPage(
+                                movieId: h.tmdbId.toString(),
+                                mediaType: h.mediaType,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PosterCard extends StatelessWidget {
+  final String? posterPath;
+  final String? fallbackLabel;
+  final double? progress;
+  final String? badge;
   final VoidCallback onPressed;
 
-  const _MovieCard({required this.result, required this.onPressed});
+  const _PosterCard({
+    required this.posterPath,
+    required this.fallbackLabel,
+    this.progress,
+    this.badge,
+    required this.onPressed,
+  });
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8),
-      child: Focus(
-        onKeyEvent: (node, event) {
-          if (event is KeyDownEvent &&
-              (event.logicalKey == LogicalKeyboardKey.select ||
-                  event.logicalKey == LogicalKeyboardKey.enter ||
-                  event.logicalKey == LogicalKeyboardKey.space)) {
-            onPressed();
-            return KeyEventResult.handled;
-          }
-          return KeyEventResult.ignored;
-        },
-        child: Builder(
-          builder: (context) {
-            final hasFocus = Focus.of(context).hasFocus;
-            return GestureDetector(
-              onTap: onPressed,
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                width: 140,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: hasFocus ? Colors.white : Colors.transparent,
-                    width: 3,
-                  ),
-                ),
-                transform: hasFocus ? (Matrix4.identity()..scale(1.1)) : Matrix4.identity(),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(5),
-                  child: result.posterPath != null
-                      ? Image.network(
-                          "https://image.tmdb.org/t/p/w300${result.posterPath}",
-                          fit: BoxFit.cover,
-                        )
-                      : Container(
-                          color: kSurfaceGrey,
-                          child: const Icon(Icons.movie, color: Colors.white54, size: 50),
+      padding: EdgeInsets.symmetric(horizontal: 6.s(context)),
+      child: Builder(builder: (outerCtx) {
+        return Focus(
+          onKeyEvent: (n, e) {
+            if (e is KeyDownEvent &&
+                (e.logicalKey == LogicalKeyboardKey.select ||
+                    e.logicalKey == LogicalKeyboardKey.enter ||
+                    e.logicalKey == LogicalKeyboardKey.space)) {
+              onPressed();
+              return KeyEventResult.handled;
+            }
+            return KeyEventResult.ignored;
+          },
+          onFocusChange: (focused) {
+            if (!focused) return;
+            // Pull the focused row to the top of the viewport. The card itself
+            // is short — using its parent row's full height isn't necessary
+            // because keepVisibleAtStart only nudges when not already visible.
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!outerCtx.mounted) return;
+              Scrollable.ensureVisible(
+                outerCtx,
+                alignment: 0.0,
+                alignmentPolicy:
+                    ScrollPositionAlignmentPolicy.keepVisibleAtStart,
+                duration: const Duration(milliseconds: 280),
+                curve: Curves.easeOut,
+              );
+            });
+          },
+          child: Builder(builder: (ctx) {
+            final focused = Focus.of(ctx).hasFocus;
+          return GestureDetector(
+            onTap: onPressed,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOut,
+              width: 132.s(context),
+              // Explicit poster (2:3) height so the card keeps its own size
+              // instead of being stretched to the row's full height — that's
+              // what let the scale grow width but not height.
+              height: 198.s(context),
+              // Reserve room below the poster. The 1.15x focus scale grows the
+              // card past its layout box; on the last row (Anime) the scroll
+              // view reveals it flush to the screen bottom, so without this the
+              // scaled bottom border would be clipped off-screen.
+              margin: EdgeInsets.only(bottom: 20.s(context)),
+              transform: focused
+                  ? (Matrix4.identity()..scale(1.15))
+                  : Matrix4.identity(),
+              transformAlignment: Alignment.center,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(4.s(context)),
+                boxShadow: focused
+                    ? [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.7),
+                          blurRadius: 22.s(context),
+                          offset: Offset(0, 10.s(context)),
                         ),
+                      ]
+                    : [],
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(4.s(context)),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    if (posterPath != null)
+                      Image.network('$imgW300$posterPath', fit: BoxFit.cover)
+                    else
+                      Container(
+                        color: kSurfaceGrey,
+                        alignment: Alignment.center,
+                        padding: EdgeInsets.all(6.s(context)),
+                        child: Text(
+                          fallbackLabel ?? '?',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: kTextWhite, fontSize: 12.s(context)),
+                        ),
+                      ),
+                    if (focused)
+                      Positioned.fill(
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            border: Border.all(color: kTextWhite, width: 2.s(context)),
+                            borderRadius: BorderRadius.circular(4.s(context)),
+                          ),
+                        ),
+                      ),
+                    if (badge != null)
+                      Positioned(
+                        top: 6.s(context),
+                        left: 6.s(context),
+                        child: Container(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: 6.s(context),
+                            vertical: 2.s(context),
+                          ),
+                          decoration: BoxDecoration(
+                            color: kDeepBlack.withOpacity(0.78),
+                            borderRadius: BorderRadius.circular(2.s(context)),
+                          ),
+                          child: Text(
+                            badge!,
+                            style: TextStyle(
+                              color: kTextWhite,
+                              fontSize: 9.s(context),
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        ),
+                      ),
+                    if (progress != null && progress! > 0)
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        child: LinearProgressIndicator(
+                          value: progress,
+                          backgroundColor: Colors.black54,
+                          valueColor: const AlwaysStoppedAnimation(kNetflixRed),
+                          minHeight: 3.s(context).clamp(2.0, 5.0),
+                        ),
+                      ),
+                  ],
                 ),
               ),
-            );
-          },
-        ),
-      ),
+            ),
+          );
+        }),
+        );
+      }),
     );
   }
 }

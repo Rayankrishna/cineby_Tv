@@ -39,7 +39,7 @@ class SearchResult {
   @JsonKey(name: 'backdrop_path')
   final String? backdropPath;
   @JsonKey(name: 'media_type')
-  final String? mediaType;
+  String? mediaType;
   @JsonKey(name: 'release_date')
   final String? releaseDate;
   @JsonKey(name: 'vote_average')
