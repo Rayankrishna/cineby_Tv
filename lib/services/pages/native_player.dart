@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:cineby_tv/services/config.dart';
+import 'package:cineby_tv/services/pages/webview.dart';
+import 'package:cineby_tv/services/stream_servers.dart';
 import 'package:cineby_tv/stores/stores.dart';
 import 'package:cineby_tv/utils/tv_scale.dart';
 import 'package:flutter/material.dart';
@@ -230,7 +232,15 @@ class _NativePlayerPageState extends State<NativePlayerPage> {
       _seekBy(10);
       return KeyEventResult.handled;
     }
-    if (key == LogicalKeyboardKey.arrowUp || key == LogicalKeyboardKey.arrowDown) {
+    if (key == LogicalKeyboardKey.arrowUp) {
+      // Open the Options sheet (subtitles toggle + source switcher) so
+      // remotes without a 'C' key or media-stop button can still reach
+      // the subtitle control.
+      _revealControls();
+      _showOptionsDialog();
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.arrowDown) {
       _revealControls();
       return KeyEventResult.handled;
     }
@@ -265,7 +275,11 @@ class _NativePlayerPageState extends State<NativePlayerPage> {
       _seekBy(-60);
       return KeyEventResult.handled;
     }
-    if (key == LogicalKeyboardKey.escape || key == LogicalKeyboardKey.goBack) {
+    if (key == LogicalKeyboardKey.escape) {
+      // Keyboard ESC only (dev/testing). The hardware BACK button (goBack) is
+      // handled by Flutter's back dispatcher — popping here too double-pops
+      // (player → details → home), skipping the details page. Let the
+      // framework pop once; dispose() still saves progress on the way out.
       _saveProgress();
       Navigator.of(context).maybePop();
       return KeyEventResult.handled;
@@ -290,6 +304,107 @@ class _NativePlayerPageState extends State<NativePlayerPage> {
     WakelockPlus.disable();
     SystemChrome.setPreferredOrientations(DeviceOrientation.values);
     super.dispose();
+  }
+
+  // ============== OPTIONS SHEET ==============
+
+  void _showOptionsDialog() {
+    if (widget.tmdbId == null) return;
+    // Pause while the dialog is open so audio doesn't keep playing under it.
+    final wasPlaying = _controller.value.isPlaying;
+    if (wasPlaying) _controller.pause();
+
+    showDialog<void>(
+      context: context,
+      barrierColor: Colors.black87,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) => Dialog(
+          backgroundColor: kSurfaceGrey,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16.s(context)),
+          ),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: 520.s(context)),
+            child: Padding(
+              padding: EdgeInsets.symmetric(vertical: 18.s(context)),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _OptionsHeader(
+                      icon: Icons.settings_rounded, label: 'Player options'),
+                  // Subtitles toggle — focusable and works with ENTER.
+                  _OptionsRow(
+                    label: 'Subtitles',
+                    icon: _showSubtitles
+                        ? Icons.closed_caption
+                        : Icons.closed_caption_off,
+                    autofocus: true,
+                    trailing: _showSubtitles ? 'On' : 'Off',
+                    onTap: () {
+                      _toggleSubtitles();
+                      setSheetState(() {});
+                    },
+                  ),
+                  SizedBox(height: 8.s(context)),
+                  _OptionsHeader(icon: Icons.dns_rounded, label: 'Source'),
+                  for (final s in streamServers)
+                    _OptionsRow(
+                      label: s.name,
+                      icon: Icons.play_circle_outline_rounded,
+                      onTap: () {
+                        Navigator.of(ctx).pop();
+                        _switchSource(s);
+                      },
+                    ),
+                  SizedBox(height: 8.s(context)),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    ).whenComplete(() {
+      if (!mounted) return;
+      if (wasPlaying) _controller.play();
+      _focusNode.requestFocus();
+    });
+  }
+
+  void _switchSource(StreamServer server) {
+    if (widget.tmdbId == null) return;
+    _saveProgress();
+    final newUrl = server.buildUrl(
+      widget.tmdbId!,
+      widget.mediaType,
+      widget.seasonNumber,
+      widget.episodeNumber,
+    );
+    // pushReplacement to MyWidget — fresh webview boots, re-extracts on the
+    // new provider, and lands back in NativePlayerPage. Current progress
+    // carries over via initialProgressSeconds so playback resumes near where
+    // the user was.
+    final resumeSeconds = _controller.value.position.inSeconds;
+    Navigator.of(context).pushReplacement(
+      PageRouteBuilder(
+        transitionDuration: Duration.zero,
+        reverseTransitionDuration: const Duration(milliseconds: 150),
+        pageBuilder: (_, __, ___) => MyWidget(
+          url: newUrl,
+          tmdbId: widget.tmdbId,
+          mediaType: widget.mediaType,
+          seasonNumber: widget.seasonNumber,
+          episodeNumber: widget.episodeNumber,
+          durationSeconds: widget.durationSeconds,
+          initialProgressSeconds: resumeSeconds > 0
+              ? resumeSeconds
+              : widget.initialProgressSeconds,
+          title: widget.title,
+          posterPath: widget.posterPath,
+          backdropPath: widget.backdropPath,
+        ),
+      ),
+    );
   }
 
   @override
@@ -610,6 +725,117 @@ class _ErrorButton extends StatelessWidget {
             ),
           );
         },
+      ),
+    );
+  }
+}
+
+class _OptionsHeader extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  const _OptionsHeader({required this.icon, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+          24.s(context), 4.s(context), 24.s(context), 10.s(context)),
+      child: Row(
+        children: [
+          Icon(icon, color: kNetflixRed, size: 20.s(context)),
+          SizedBox(width: 10.s(context)),
+          Text(
+            label,
+            style: TextStyle(
+              color: kTextWhite,
+              fontSize: 16.s(context),
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.4,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _OptionsRow extends StatefulWidget {
+  final String label;
+  final IconData icon;
+  final VoidCallback onTap;
+  final String? trailing;
+  final bool autofocus;
+
+  const _OptionsRow({
+    required this.label,
+    required this.icon,
+    required this.onTap,
+    this.trailing,
+    this.autofocus = false,
+  });
+
+  @override
+  State<_OptionsRow> createState() => _OptionsRowState();
+}
+
+class _OptionsRowState extends State<_OptionsRow> {
+  bool _focused = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Focus(
+      autofocus: widget.autofocus,
+      onFocusChange: (f) => setState(() => _focused = f),
+      onKeyEvent: (node, event) {
+        if (event is KeyDownEvent &&
+            (event.logicalKey == LogicalKeyboardKey.enter ||
+                event.logicalKey == LogicalKeyboardKey.select ||
+                event.logicalKey == LogicalKeyboardKey.space)) {
+          widget.onTap();
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        curve: Curves.easeOut,
+        color: _focused
+            ? kNetflixRed.withOpacity(0.25)
+            : Colors.transparent,
+        padding: EdgeInsets.symmetric(
+          horizontal: 24.s(context),
+          vertical: 12.s(context),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              widget.icon,
+              color: _focused ? Colors.white : Colors.white70,
+              size: 20.s(context),
+            ),
+            SizedBox(width: 14.s(context)),
+            Expanded(
+              child: Text(
+                widget.label,
+                style: TextStyle(
+                  color: kTextWhite,
+                  fontSize: 14.5.s(context),
+                  fontWeight:
+                      _focused ? FontWeight.w600 : FontWeight.w400,
+                ),
+              ),
+            ),
+            if (widget.trailing != null)
+              Text(
+                widget.trailing!,
+                style: TextStyle(
+                  color: kNetflixRed,
+                  fontSize: 13.s(context),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }

@@ -1,7 +1,7 @@
 import 'package:cineby_tv/models/movie_details_model.dart';
 import 'package:cineby_tv/models/search_model.dart';
 import 'package:cineby_tv/services/config.dart';
-import 'package:dio/dio.dart';
+import 'package:cineby_tv/services/tmdb_client.dart';
 import 'package:mobx/mobx.dart';
 
 part 'search_store.g.dart';
@@ -9,8 +9,6 @@ part 'search_store.g.dart';
 class SearchStore = _SearchStore with _$SearchStore;
 
 abstract class _SearchStore with Store {
-  final Dio _dio = Dio();
-
   @observable
   String searchQuery = '';
 
@@ -53,7 +51,7 @@ abstract class _SearchStore with Store {
     isLoading = true;
     errorMessage = null;
     try {
-      final response = await _dio.get('$searchUrl$query');
+      final response = await tmdbDio.get('$searchUrl$query');
       if (response.statusCode == 200) {
         final searchResponse = SearchResponse.fromJson(response.data);
         searchResults = ObservableList.of(searchResponse.results);
@@ -69,7 +67,7 @@ abstract class _SearchStore with Store {
 
   Future<ObservableList<SearchResult>> _fetchList(String url, String mediaTypeFallback) async {
     try {
-      final r = await _dio.get(url);
+      final r = await tmdbDio.get(url);
       if (r.statusCode == 200) {
         final sr = SearchResponse.fromJson(r.data);
         // discover/* endpoints don't return media_type; the SearchResult model
@@ -111,7 +109,7 @@ abstract class _SearchStore with Store {
     errorMessage = null;
     movieDetails = null;
     try {
-      final response = await _dio.get('$movieDetailUrl/$id$movieDetailParams');
+      final response = await tmdbDio.get('$movieDetailUrl/$id$movieDetailParams');
       if (response.statusCode == 200) {
         movieDetails = MovieDetails.fromJson(response.data);
       } else {

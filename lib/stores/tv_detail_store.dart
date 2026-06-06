@@ -1,6 +1,6 @@
 import 'package:cineby_tv/models/tv_detail_model.dart';
 import 'package:cineby_tv/services/config.dart';
-import 'package:dio/dio.dart';
+import 'package:cineby_tv/services/tmdb_client.dart';
 import 'package:mobx/mobx.dart';
 
 part 'tv_detail_store.g.dart';
@@ -8,8 +8,6 @@ part 'tv_detail_store.g.dart';
 class TvDetailStore = _TvDetailStore with _$TvDetailStore;
 
 abstract class _TvDetailStore with Store {
-  final Dio _dio = Dio();
-
   @observable
   TvDetail? tvDetail;
 
@@ -36,7 +34,7 @@ abstract class _TvDetailStore with Store {
     selectedSeason = null;
     selectedSeasonNumber = null;
     try {
-      final res = await _dio.get('$tvDetailUrl/$tvId$tvDetailParams');
+      final res = await tmdbDio.get('$tvDetailUrl/$tvId$tvDetailParams');
       if (res.statusCode == 200) {
         tvDetail = TvDetail.fromJson(Map<String, dynamic>.from(res.data as Map));
         if (tvDetail!.seasons.isNotEmpty) {
@@ -58,7 +56,7 @@ abstract class _TvDetailStore with Store {
     isSeasonLoading = true;
     selectedSeasonNumber = seasonNumber;
     try {
-      final res = await _dio.get(
+      final res = await tmdbDio.get(
         '$tvSeasonUrl/$tvId/season/$seasonNumber$tvSeasonParams',
       );
       if (res.statusCode == 200) {

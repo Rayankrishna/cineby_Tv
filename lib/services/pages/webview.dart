@@ -3,6 +3,7 @@ import 'dart:collection';
 import 'dart:io' show Platform;
 import 'package:cineby_tv/services/config.dart';
 import 'package:cineby_tv/services/pages/native_player.dart';
+import 'package:cineby_tv/services/stream_servers.dart';
 import 'package:cineby_tv/utils/tv_scale.dart';
 // import 'package:adblocker_webview/adblocker_webview.dart';
 import 'package:flutter/material.dart';
@@ -566,8 +567,96 @@ class _MyWidgetState extends State<MyWidget> {
                 onRetry: _retryExtraction,
                 onShowWebview: () => setState(() => _showRawWebview = true),
                 onCancel: () => Navigator.of(context).maybePop(),
+                onSwitchSource: _showSourcePicker,
               )),
           ],
+        ),
+      ),
+    );
+  }
+
+  void _showSourcePicker() {
+    if (widget.tmdbId == null) return;
+    final current = streamServerForUrl(_currentUrl);
+    showDialog<void>(
+      context: context,
+      barrierColor: Colors.black87,
+      builder: (ctx) => Dialog(
+        backgroundColor: kSurfaceGrey,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16.s(context)),
+        ),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: 520.s(context)),
+          child: Padding(
+            padding: EdgeInsets.symmetric(vertical: 18.s(context)),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: EdgeInsets.fromLTRB(24.s(context), 4.s(context),
+                      24.s(context), 14.s(context)),
+                  child: Row(
+                    children: [
+                      Icon(Icons.dns_rounded,
+                          color: kNetflixRed, size: 22.s(context)),
+                      SizedBox(width: 10.s(context)),
+                      Text(
+                        'Switch source',
+                        style: TextStyle(
+                          color: kTextWhite,
+                          fontSize: 18.s(context),
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                for (int i = 0; i < streamServers.length; i++)
+                  _SourceRow(
+                    server: streamServers[i],
+                    isCurrent: streamServers[i] == current,
+                    autofocus: i == 0,
+                    onTap: () {
+                      Navigator.of(ctx).pop();
+                      _switchSource(streamServers[i]);
+                    },
+                  ),
+                SizedBox(height: 8.s(context)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _switchSource(StreamServer server) {
+    if (widget.tmdbId == null) return;
+    final newUrl = server.buildUrl(
+      widget.tmdbId!,
+      widget.mediaType,
+      widget.seasonNumber,
+      widget.episodeNumber,
+    );
+    // pushReplacement so the current webview + extraction state are torn
+    // down and a fresh one boots on the new embed URL.
+    Navigator.of(context).pushReplacement(
+      PageRouteBuilder(
+        transitionDuration: Duration.zero,
+        reverseTransitionDuration: const Duration(milliseconds: 150),
+        pageBuilder: (_, __, ___) => MyWidget(
+          url: newUrl,
+          tmdbId: widget.tmdbId,
+          mediaType: widget.mediaType,
+          seasonNumber: widget.seasonNumber,
+          episodeNumber: widget.episodeNumber,
+          durationSeconds: widget.durationSeconds,
+          initialProgressSeconds: widget.initialProgressSeconds,
+          title: widget.title,
+          posterPath: widget.posterPath,
+          backdropPath: widget.backdropPath,
         ),
       ),
     );
@@ -599,6 +688,7 @@ class _PrepOverlay extends StatelessWidget {
   final VoidCallback onRetry;
   final VoidCallback onShowWebview;
   final VoidCallback onCancel;
+  final VoidCallback onSwitchSource;
 
   const _PrepOverlay({
     required this.title,
@@ -609,6 +699,7 @@ class _PrepOverlay extends StatelessWidget {
     required this.onRetry,
     required this.onShowWebview,
     required this.onCancel,
+    required this.onSwitchSource,
   });
 
   @override
@@ -647,6 +738,7 @@ class _PrepOverlay extends StatelessWidget {
               : _LoadingCard(
                   title: title,
                   streamCaptured: streamCaptured,
+                  onSwitchSource: onSwitchSource,
                 ),
         ),
       ],
@@ -657,7 +749,12 @@ class _PrepOverlay extends StatelessWidget {
 class _LoadingCard extends StatelessWidget {
   final String? title;
   final bool streamCaptured;
-  const _LoadingCard({required this.title, required this.streamCaptured});
+  final VoidCallback onSwitchSource;
+  const _LoadingCard({
+    required this.title,
+    required this.streamCaptured,
+    required this.onSwitchSource,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -693,7 +790,162 @@ class _LoadingCard extends StatelessWidget {
           textAlign: TextAlign.center,
           style: TextStyle(color: Colors.white70, fontSize: 14.s(context)),
         ),
+        SizedBox(height: 24.s(context)),
+        // Focusable switch-source button — reachable via D-pad while waiting
+        // for extraction. Lets the user bail to a different provider if the
+        // current one stalls without backing all the way out.
+        _PillButton(
+          label: 'Switch source',
+          icon: Icons.dns_rounded,
+          autofocus: true,
+          onPressed: onSwitchSource,
+        ),
       ],
+    );
+  }
+}
+
+class _PillButton extends StatefulWidget {
+  final String label;
+  final IconData icon;
+  final bool autofocus;
+  final VoidCallback onPressed;
+  const _PillButton({
+    required this.label,
+    required this.icon,
+    required this.onPressed,
+    this.autofocus = false,
+  });
+
+  @override
+  State<_PillButton> createState() => _PillButtonState();
+}
+
+class _PillButtonState extends State<_PillButton> {
+  bool _focused = false;
+  @override
+  Widget build(BuildContext context) {
+    return Focus(
+      autofocus: widget.autofocus,
+      onFocusChange: (f) => setState(() => _focused = f),
+      onKeyEvent: (node, event) {
+        if (event is KeyDownEvent &&
+            (event.logicalKey == LogicalKeyboardKey.enter ||
+                event.logicalKey == LogicalKeyboardKey.select ||
+                event.logicalKey == LogicalKeyboardKey.space)) {
+          widget.onPressed();
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        curve: Curves.easeOut,
+        padding: EdgeInsets.symmetric(
+          horizontal: 22.s(context),
+          vertical: 12.s(context),
+        ),
+        decoration: BoxDecoration(
+          color: _focused ? kNetflixRed : Colors.white.withOpacity(0.12),
+          borderRadius: BorderRadius.circular(100),
+          border: Border.all(
+            color: _focused ? kNetflixRed : Colors.white.withOpacity(0.16),
+            width: 2,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(widget.icon, color: Colors.white, size: 18.s(context)),
+            SizedBox(width: 10.s(context)),
+            Text(
+              widget.label,
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 14.s(context),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SourceRow extends StatefulWidget {
+  final StreamServer server;
+  final bool isCurrent;
+  final bool autofocus;
+  final VoidCallback onTap;
+  const _SourceRow({
+    required this.server,
+    required this.isCurrent,
+    required this.onTap,
+    this.autofocus = false,
+  });
+
+  @override
+  State<_SourceRow> createState() => _SourceRowState();
+}
+
+class _SourceRowState extends State<_SourceRow> {
+  bool _focused = false;
+  @override
+  Widget build(BuildContext context) {
+    return Focus(
+      autofocus: widget.autofocus,
+      onFocusChange: (f) => setState(() => _focused = f),
+      onKeyEvent: (node, event) {
+        if (event is KeyDownEvent &&
+            (event.logicalKey == LogicalKeyboardKey.enter ||
+                event.logicalKey == LogicalKeyboardKey.select ||
+                event.logicalKey == LogicalKeyboardKey.space)) {
+          widget.onTap();
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        curve: Curves.easeOut,
+        color: _focused
+            ? kNetflixRed.withOpacity(0.25)
+            : Colors.transparent,
+        padding: EdgeInsets.symmetric(
+          horizontal: 24.s(context),
+          vertical: 14.s(context),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              Icons.play_circle_outline_rounded,
+              color: widget.isCurrent
+                  ? kNetflixRed
+                  : (_focused ? Colors.white : Colors.white70),
+              size: 20.s(context),
+            ),
+            SizedBox(width: 14.s(context)),
+            Expanded(
+              child: Text(
+                widget.server.name,
+                style: TextStyle(
+                  color: widget.isCurrent
+                      ? kNetflixRed
+                      : kTextWhite,
+                  fontSize: 14.5.s(context),
+                  fontWeight: widget.isCurrent
+                      ? FontWeight.w600
+                      : FontWeight.w400,
+                ),
+              ),
+            ),
+            if (widget.isCurrent)
+              Icon(Icons.check_rounded,
+                  color: kNetflixRed, size: 18.s(context)),
+          ],
+        ),
+      ),
     );
   }
 }
