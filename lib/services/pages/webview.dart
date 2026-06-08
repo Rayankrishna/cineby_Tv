@@ -61,7 +61,6 @@ class _MyWidgetState extends State<MyWidget> {
   static const Duration _extractionTimeout = Duration(seconds: 40);
   bool _handedOff = false;
   bool _extractionFailed = false;
-  bool _showRawWebview = false; // user fallback when extraction times out
 
   // Mirror the proven settings from the phone app (cineby-main). Notably we
   // do NOT force DESKTOP content mode or apply an iframeSandbox: both make
@@ -93,7 +92,13 @@ class _MyWidgetState extends State<MyWidget> {
     _handoffTimer?.cancel();
     _autoPlayTimer?.cancel();
     _extractionTimeoutTimer?.cancel();
-    WakelockPlus.disable();
+    // Only release the wakelock when actually leaving playback. On handoff the
+    // native player has already re-enabled it in its initState, and
+    // pushReplacement disposes THIS page afterwards — disabling here would
+    // clobber the player's wakelock and let the TV screen sleep mid-video.
+    if (!_handedOff) {
+      WakelockPlus.disable();
+    }
     super.dispose();
   }
 
@@ -278,6 +283,10 @@ class _MyWidgetState extends State<MyWidget> {
       body: SafeArea(
         child: Stack(
           children: [
+            // Webview + its remote-key forwarder. Dropped from the tree once
+            // extraction fails so it stops swallowing the failure overlay's
+            // D-pad / Select input (it autofocuses and forwards keys to JS).
+            if (!_extractionFailed)
             Focus(
               autofocus: true,
               onKeyEvent: (node, event) {
@@ -554,18 +563,16 @@ class _MyWidgetState extends State<MyWidget> {
                 },
               ),
             ),
-            // Full-screen prep overlay. The webview keeps running underneath
-            // so JS/extraction proceeds, but the user never sees its (often
-            // broken-at-4K) HTML content.
-            if (!_showRawWebview)
-              Positioned.fill(child: _PrepOverlay(
+            // Full-screen prep overlay. While extracting, the webview runs
+            // underneath so JS/extraction proceeds but its (often broken-at-4K)
+            // HTML never shows. On failure the webview above is removed so the
+            // overlay's buttons own the remote.
+            Positioned.fill(child: _PrepOverlay(
                 title: widget.title,
                 backdropPath: widget.backdropPath ?? widget.posterPath,
                 isLoading: _isLoading,
                 streamCaptured: _streamUrl != null,
                 extractionFailed: _extractionFailed,
-                onRetry: _retryExtraction,
-                onShowWebview: () => setState(() => _showRawWebview = true),
                 onCancel: () => Navigator.of(context).maybePop(),
                 onSwitchSource: _showSourcePicker,
               )),
@@ -662,21 +669,6 @@ class _MyWidgetState extends State<MyWidget> {
     );
   }
 
-  void _retryExtraction() {
-    setState(() {
-      _extractionFailed = false;
-      _streamUrl = null;
-      _subtitleUrl = null;
-      _streamHeaders = {};
-      _autoPlayAttempts = 0;
-    });
-    _extractionTimeoutTimer?.cancel();
-    _extractionTimeoutTimer = Timer(_extractionTimeout, () {
-      if (!mounted || _handedOff || _streamUrl != null) return;
-      setState(() => _extractionFailed = true);
-    });
-    _webViewController?.loadUrl(urlRequest: URLRequest(url: WebUri(_currentUrl)));
-  }
 }
 
 class _PrepOverlay extends StatelessWidget {
@@ -685,8 +677,6 @@ class _PrepOverlay extends StatelessWidget {
   final bool isLoading;
   final bool streamCaptured;
   final bool extractionFailed;
-  final VoidCallback onRetry;
-  final VoidCallback onShowWebview;
   final VoidCallback onCancel;
   final VoidCallback onSwitchSource;
 
@@ -696,8 +686,6 @@ class _PrepOverlay extends StatelessWidget {
     required this.isLoading,
     required this.streamCaptured,
     required this.extractionFailed,
-    required this.onRetry,
-    required this.onShowWebview,
     required this.onCancel,
     required this.onSwitchSource,
   });
@@ -731,8 +719,7 @@ class _PrepOverlay extends StatelessWidget {
           child: extractionFailed
               ? _FailureCard(
                   title: title,
-                  onRetry: onRetry,
-                  onShowWebview: onShowWebview,
+                  onSwitchSource: onSwitchSource,
                   onCancel: onCancel,
                 )
               : _LoadingCard(
@@ -952,14 +939,12 @@ class _SourceRowState extends State<_SourceRow> {
 
 class _FailureCard extends StatelessWidget {
   final String? title;
-  final VoidCallback onRetry;
-  final VoidCallback onShowWebview;
+  final VoidCallback onSwitchSource;
   final VoidCallback onCancel;
 
   const _FailureCard({
     required this.title,
-    required this.onRetry,
-    required this.onShowWebview,
+    required this.onSwitchSource,
     required this.onCancel,
   });
 
@@ -1002,16 +987,11 @@ class _FailureCard extends StatelessWidget {
             alignment: WrapAlignment.center,
             children: [
               _OverlayButton(
-                label: 'Retry',
-                icon: Icons.refresh,
+                label: 'Try a different server',
+                icon: Icons.dns_rounded,
                 isPrimary: true,
                 autofocus: true,
-                onPressed: onRetry,
-              ),
-              _OverlayButton(
-                label: 'Open web player',
-                icon: Icons.open_in_browser,
-                onPressed: onShowWebview,
+                onPressed: onSwitchSource,
               ),
               _OverlayButton(
                 label: 'Back',

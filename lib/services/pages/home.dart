@@ -78,6 +78,36 @@ class _MyHomePageState extends State<MyHomePage> {
                   items: _searchStore.topAnime,
                   defaultMediaType: 'tv',
                 ),
+              if (_searchStore.actionMovies.isNotEmpty)
+                _SliverRow(
+                  title: 'Best in Action',
+                  items: _searchStore.actionMovies,
+                  defaultMediaType: 'movie',
+                ),
+              if (_searchStore.comedyMovies.isNotEmpty)
+                _SliverRow(
+                  title: 'Best in Comedy',
+                  items: _searchStore.comedyMovies,
+                  defaultMediaType: 'movie',
+                ),
+              if (_searchStore.dramaMovies.isNotEmpty)
+                _SliverRow(
+                  title: 'Best in Drama',
+                  items: _searchStore.dramaMovies,
+                  defaultMediaType: 'movie',
+                ),
+              if (_searchStore.horrorMovies.isNotEmpty)
+                _SliverRow(
+                  title: 'Best in Horror',
+                  items: _searchStore.horrorMovies,
+                  defaultMediaType: 'movie',
+                ),
+              if (_searchStore.sciFiMovies.isNotEmpty)
+                _SliverRow(
+                  title: 'Best in Sci-Fi',
+                  items: _searchStore.sciFiMovies,
+                  defaultMediaType: 'movie',
+                ),
               SliverPadding(padding: EdgeInsets.only(bottom: 60.s(context))),
             ],
           );

@@ -57,6 +57,10 @@ class _NativePlayerPageState extends State<NativePlayerPage> {
   Timer? _progressTimer;
   DateTime? _streamExtractedAt;
 
+  // True once we've pushReplacement'd to a fresh webview for a source switch.
+  // Guards dispose() from releasing the wakelock the new page just took.
+  bool _switchingSource = false;
+
   // Seek indicator
   String? _seekHint;
   Timer? _seekHintTimer;
@@ -301,7 +305,11 @@ class _NativePlayerPageState extends State<NativePlayerPage> {
     _controller.removeListener(_handleVideoError);
     _controller.dispose();
     _focusNode.dispose();
-    WakelockPlus.disable();
+    // Don't release the wakelock if we're handing off to a fresh webview for a
+    // source switch — it has already re-enabled it and this dispose runs after.
+    if (!_switchingSource) {
+      WakelockPlus.disable();
+    }
     SystemChrome.setPreferredOrientations(DeviceOrientation.values);
     super.dispose();
   }
@@ -373,6 +381,7 @@ class _NativePlayerPageState extends State<NativePlayerPage> {
 
   void _switchSource(StreamServer server) {
     if (widget.tmdbId == null) return;
+    _switchingSource = true;
     _saveProgress();
     final newUrl = server.buildUrl(
       widget.tmdbId!,

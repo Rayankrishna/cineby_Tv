@@ -1,6 +1,7 @@
 import 'package:cineby_tv/models/history_item.dart';
 import 'package:cineby_tv/models/tv_detail_model.dart';
 import 'package:cineby_tv/services/config.dart';
+import 'package:cineby_tv/services/pages/browse_results_page.dart';
 import 'package:cineby_tv/services/pages/webview.dart';
 import 'package:cineby_tv/services/stream_servers.dart';
 import 'package:cineby_tv/stores/search_store.dart';
@@ -108,6 +109,19 @@ class _MovieDetailsPageState extends State<MovieDetailsPage> {
               ),
             ),
           ),
+          if (movie.genres != null && movie.genres!.isNotEmpty) ...[
+            SliverToBoxAdapter(child: _sectionTitle(context, 'Genres')),
+            SliverToBoxAdapter(
+              child: _buildGenreChips(
+                context,
+                movie.genres!
+                    .map((g) => (id: g.id ?? 0, name: g.name ?? ''))
+                    .where((g) => g.id != 0 && g.name.isNotEmpty)
+                    .toList(),
+                'movie',
+              ),
+            ),
+          ],
           if (movie.credits?.cast != null && movie.credits!.cast!.isNotEmpty) ...[
             SliverToBoxAdapter(child: _sectionTitle(context, 'Cast')),
             SliverToBoxAdapter(child: _buildCast(context, movie.credits!.cast!)),
@@ -168,6 +182,16 @@ class _MovieDetailsPageState extends State<MovieDetailsPage> {
           ),
           SliverToBoxAdapter(child: _sectionTitle(context, 'Episodes')),
           SliverToBoxAdapter(child: _EpisodePicker(store: _tvStore, tv: tv, onPlay: _playEpisode)),
+          if (tv.genres.isNotEmpty) ...[
+            SliverToBoxAdapter(child: _sectionTitle(context, 'Genres')),
+            SliverToBoxAdapter(
+              child: _buildGenreChips(
+                context,
+                tv.genres.map((g) => (id: g.id, name: g.name)).toList(),
+                'tv',
+              ),
+            ),
+          ],
           if (tv.cast.isNotEmpty) ...[
             SliverToBoxAdapter(child: _sectionTitle(context, 'Cast')),
             SliverToBoxAdapter(child: _buildCastTv(context, tv.cast)),
@@ -176,6 +200,44 @@ class _MovieDetailsPageState extends State<MovieDetailsPage> {
         ],
       );
     });
+  }
+
+  /// Horizontal row of focusable genre chips. Tap (or D-pad ENTER) opens
+  /// the genre's browse page. Caller passes lightweight (id, name) records
+  /// so we don't depend on either of the two `Genre` classes (movie + TV
+  /// models declare their own).
+  Widget _buildGenreChips(
+    BuildContext context,
+    List<({int id, String name})> genres,
+    String mediaType,
+  ) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        40.s(context),
+        4.s(context),
+        40.s(context),
+        4.s(context),
+      ),
+      child: Wrap(
+        spacing: 10.s(context),
+        runSpacing: 10.s(context),
+        children: genres
+            .map((g) => _GenreChip(
+                  label: g.name,
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => GenreResultsPage(
+                        genreId: g.id,
+                        genreName: g.name,
+                        mediaType: mediaType,
+                      ),
+                    ),
+                  ),
+                ))
+            .toList(),
+      ),
+    );
   }
 
   // ============== ACTIONS ==============
@@ -831,11 +893,24 @@ class _EpisodePicker extends StatelessWidget {
                       child: CircularProgressIndicator(color: kNetflixRed),
                     );
                   }
-                  final eps = store.selectedSeason!.episodes;
+                  // Drop episodes that haven't aired yet — TMDB lists future
+                  // episodes in the season payload but they obviously can't
+                  // be played.
+                  final now = DateTime.now();
+                  final eps = store.selectedSeason!.episodes.where((ep) {
+                    final d = ep.airDate;
+                    if (d == null || d.isEmpty) return false;
+                    final parsed = DateTime.tryParse(d);
+                    if (parsed == null) return false;
+                    return !parsed.isAfter(now);
+                  }).toList();
                   if (eps.isEmpty) {
                     return Center(
-                      child: Text('No episodes',
-                          style: TextStyle(color: kTextGrey, fontSize: 14.s(context))),
+                      child: Text(
+                        'No episodes have aired yet',
+                        style: TextStyle(
+                            color: kTextGrey, fontSize: 14.s(context)),
+                      ),
                     );
                   }
                   return ListView.separated(
@@ -993,105 +1068,260 @@ class _EpisodeCard extends StatelessWidget {
   }
 }
 
-// ============== CAST CARDS ==============
-class _CastCard extends StatelessWidget {
-  final CastMember actor;
-  const _CastCard({required this.actor});
+// ============== GENRE CHIPS ==============
+class _GenreChip extends StatefulWidget {
+  final String label;
+  final VoidCallback onTap;
+  const _GenreChip({required this.label, required this.onTap});
+
+  @override
+  State<_GenreChip> createState() => _GenreChipState();
+}
+
+class _GenreChipState extends State<_GenreChip> {
+  bool _focused = false;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.symmetric(horizontal: 8.s(context)),
-      child: SizedBox(
-        width: 120.s(context),
-        child: Column(
-          children: [
-            Container(
-              height: 140.s(context),
-              width: 120.s(context),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(10.s(context)),
-                color: kSurfaceGrey,
-                image: actor.profilePath != null
-                    ? DecorationImage(
-                        image: NetworkImage('$imgW200${actor.profilePath}'),
-                        fit: BoxFit.cover,
-                      )
-                    : null,
-              ),
-              child: actor.profilePath == null
-                  ? Icon(Icons.person, color: Colors.white24, size: 48.s(context))
-                  : null,
+    return Focus(
+      onFocusChange: (f) => setState(() => _focused = f),
+      onKeyEvent: (n, e) {
+        if (e is KeyDownEvent &&
+            (e.logicalKey == LogicalKeyboardKey.select ||
+                e.logicalKey == LogicalKeyboardKey.enter ||
+                e.logicalKey == LogicalKeyboardKey.space)) {
+          widget.onTap();
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          curve: Curves.easeOut,
+          padding: EdgeInsets.symmetric(
+            horizontal: 16.s(context),
+            vertical: 10.s(context),
+          ),
+          decoration: BoxDecoration(
+            color: _focused ? kNetflixRed : Colors.white12,
+            borderRadius: BorderRadius.circular(100),
+            border: Border.all(
+              color: _focused ? kNetflixRed : Colors.white24,
+              width: 1.5,
             ),
-            SizedBox(height: 8.s(context)),
-            Text(
-              actor.name,
-              style: TextStyle(color: kTextWhite, fontSize: 13.s(context)),
-              textAlign: TextAlign.center,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+          ),
+          child: Text(
+            widget.label,
+            style: TextStyle(
+              color: kTextWhite,
+              fontSize: 13.s(context),
+              fontWeight: FontWeight.w600,
             ),
-            if (actor.character != null)
-              Text(
-                actor.character!,
-                style: TextStyle(color: kTextGrey, fontSize: 11.s(context)),
-                textAlign: TextAlign.center,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-          ],
+          ),
         ),
       ),
     );
   }
 }
 
-class _CastCardDyn extends StatelessWidget {
+// ============== CAST CARDS ==============
+class _CastCard extends StatefulWidget {
+  final CastMember actor;
+  const _CastCard({required this.actor});
+
+  @override
+  State<_CastCard> createState() => _CastCardState();
+}
+
+class _CastCardState extends State<_CastCard> {
+  bool _focused = false;
+  void _open() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PersonFilmographyPage(
+          personId: widget.actor.id,
+          personName: widget.actor.name,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final actor = widget.actor;
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: 8.s(context)),
+      child: Focus(
+        onFocusChange: (f) => setState(() => _focused = f),
+        onKeyEvent: (n, e) {
+          if (e is KeyDownEvent &&
+              (e.logicalKey == LogicalKeyboardKey.select ||
+                  e.logicalKey == LogicalKeyboardKey.enter ||
+                  e.logicalKey == LogicalKeyboardKey.space)) {
+            _open();
+            return KeyEventResult.handled;
+          }
+          return KeyEventResult.ignored;
+        },
+        child: GestureDetector(
+          onTap: _open,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOut,
+            width: 120.s(context),
+            transform: _focused
+                ? (Matrix4.identity()..scale(1.08))
+                : Matrix4.identity(),
+            transformAlignment: Alignment.center,
+            child: Column(
+              children: [
+                Container(
+                  height: 140.s(context),
+                  width: 120.s(context),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(10.s(context)),
+                    color: kSurfaceGrey,
+                    border: Border.all(
+                      color: _focused ? kNetflixRed : Colors.transparent,
+                      width: 2,
+                    ),
+                    image: actor.profilePath != null
+                        ? DecorationImage(
+                            image: NetworkImage('$imgW200${actor.profilePath}'),
+                            fit: BoxFit.cover,
+                          )
+                        : null,
+                  ),
+                  child: actor.profilePath == null
+                      ? Icon(Icons.person,
+                          color: Colors.white24, size: 48.s(context))
+                      : null,
+                ),
+                SizedBox(height: 8.s(context)),
+                Text(
+                  actor.name,
+                  style: TextStyle(color: kTextWhite, fontSize: 13.s(context)),
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (actor.character != null)
+                  Text(
+                    actor.character!,
+                    style: TextStyle(
+                        color: kTextGrey, fontSize: 11.s(context)),
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CastCardDyn extends StatefulWidget {
   final dynamic actor;
   const _CastCardDyn({required this.actor});
 
   @override
+  State<_CastCardDyn> createState() => _CastCardDynState();
+}
+
+class _CastCardDynState extends State<_CastCardDyn> {
+  bool _focused = false;
+  void _open() {
+    final id = widget.actor.id as int?;
+    if (id == null) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PersonFilmographyPage(
+          personId: id,
+          personName: (widget.actor.name as String?) ?? 'Actor',
+        ),
+      ),
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final actor = widget.actor;
     return Padding(
       padding: EdgeInsets.symmetric(horizontal: 8.s(context)),
-      child: SizedBox(
-        width: 120.s(context),
-        child: Column(
-          children: [
-            Container(
-              height: 140.s(context),
-              width: 120.s(context),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(10.s(context)),
-                color: kSurfaceGrey,
-                image: actor.profilePath != null
-                    ? DecorationImage(
-                        image: NetworkImage('$imgW200${actor.profilePath}'),
-                        fit: BoxFit.cover,
-                      )
-                    : null,
-              ),
-              child: actor.profilePath == null
-                  ? Icon(Icons.person, color: Colors.white24, size: 48.s(context))
-                  : null,
+      child: Focus(
+        onFocusChange: (f) => setState(() => _focused = f),
+        onKeyEvent: (n, e) {
+          if (e is KeyDownEvent &&
+              (e.logicalKey == LogicalKeyboardKey.select ||
+                  e.logicalKey == LogicalKeyboardKey.enter ||
+                  e.logicalKey == LogicalKeyboardKey.space)) {
+            _open();
+            return KeyEventResult.handled;
+          }
+          return KeyEventResult.ignored;
+        },
+        child: GestureDetector(
+          onTap: _open,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOut,
+            width: 120.s(context),
+            transform: _focused
+                ? (Matrix4.identity()..scale(1.08))
+                : Matrix4.identity(),
+            transformAlignment: Alignment.center,
+            child: Column(
+              children: [
+                Container(
+                  height: 140.s(context),
+                  width: 120.s(context),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(10.s(context)),
+                    color: kSurfaceGrey,
+                    border: Border.all(
+                      color: _focused ? kNetflixRed : Colors.transparent,
+                      width: 2,
+                    ),
+                    image: actor.profilePath != null
+                        ? DecorationImage(
+                            image:
+                                NetworkImage('$imgW200${actor.profilePath}'),
+                            fit: BoxFit.cover,
+                          )
+                        : null,
+                  ),
+                  child: actor.profilePath == null
+                      ? Icon(Icons.person,
+                          color: Colors.white24, size: 48.s(context))
+                      : null,
+                ),
+                SizedBox(height: 8.s(context)),
+                Text(
+                  actor.name ?? '',
+                  style: TextStyle(color: kTextWhite, fontSize: 13.s(context)),
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (actor.character != null)
+                  Text(
+                    actor.character ?? '',
+                    style: TextStyle(
+                        color: kTextGrey, fontSize: 11.s(context)),
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+              ],
             ),
-            SizedBox(height: 8.s(context)),
-            Text(
-              actor.name ?? '',
-              style: TextStyle(color: kTextWhite, fontSize: 13.s(context)),
-              textAlign: TextAlign.center,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            if (actor.character != null)
-              Text(
-                actor.character ?? '',
-                style: TextStyle(color: kTextGrey, fontSize: 11.s(context)),
-                textAlign: TextAlign.center,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-          ],
+          ),
         ),
       ),
     );

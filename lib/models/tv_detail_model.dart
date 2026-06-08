@@ -7,11 +7,18 @@ class Genre {
 }
 
 class CastMember {
+  final int id;
   final String name;
   final String? character;
   final String? profilePath;
-  const CastMember({required this.name, this.character, this.profilePath});
+  const CastMember({
+    required this.id,
+    required this.name,
+    this.character,
+    this.profilePath,
+  });
   factory CastMember.fromJson(Map<String, dynamic> j) => CastMember(
+        id: (j['id'] as num?)?.toInt() ?? 0,
         name: (j['name'] ?? '') as String,
         character: j['character'] as String?,
         profilePath: j['profile_path'] as String?,

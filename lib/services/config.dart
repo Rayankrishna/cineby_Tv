@@ -27,6 +27,29 @@ const String topSeriesUrl =
 const String topAnimeUrl =
     '$_tmdbBase/discover/tv?api_key=$tmdbApiKey&with_genres=16&with_origin_country=JP|CN&sort_by=popularity.desc&language=en&page=1';
 
+// Genre rows on home. Same /discover/movie endpoint, one with_genres filter
+// per row. TMDB genre ids — see https://developer.themoviedb.org/reference/genre-movie-list
+String movieByGenreUrl(int genreId) =>
+    '$_tmdbBase/discover/movie?api_key=$tmdbApiKey'
+    '&with_genres=$genreId&sort_by=popularity.desc&language=en&page=1';
+
+String tvByGenreUrl(int genreId) =>
+    '$_tmdbBase/discover/tv?api_key=$tmdbApiKey'
+    '&with_genres=$genreId&sort_by=popularity.desc&language=en&page=1';
+
+const int tmdbGenreAction = 28;
+const int tmdbGenreComedy = 35;
+const int tmdbGenreDrama = 18;
+const int tmdbGenreHorror = 27;
+const int tmdbGenreSciFi = 878;
+const int tmdbGenreRomance = 10749;
+
+// Person filmography — every movie / TV show an actor has appeared in.
+String personMovieCreditsUrl(int personId) =>
+    '$_tmdbBase/person/$personId/movie_credits?api_key=$tmdbApiKey&language=en';
+String personTvCreditsUrl(int personId) =>
+    '$_tmdbBase/person/$personId/tv_credits?api_key=$tmdbApiKey&language=en';
+
 const String movieDetailUrl = '$_tmdbBase/movie';
 const String movieDetailParams =
     '?api_key=$tmdbApiKey&append_to_response=credits,external_ids,videos&language=en';
