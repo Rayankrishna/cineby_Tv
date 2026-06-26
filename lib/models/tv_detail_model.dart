@@ -107,6 +107,9 @@ class TvDetail {
   final List<CastMember> cast;
   final String? creatorName;
   final List<SeasonSummary> seasons;
+  // The show's IMDb id (from external_ids) — used as parent_imdb_id for
+  // OpenSubtitles episode lookups.
+  final String? imdbId;
 
   const TvDetail({
     required this.id,
@@ -125,6 +128,7 @@ class TvDetail {
     this.cast = const [],
     this.creatorName,
     this.seasons = const [],
+    this.imdbId,
   });
 
   factory TvDetail.fromJson(Map<String, dynamic> j) {
@@ -153,6 +157,8 @@ class TvDetail {
           .map((e) => CastMember.fromJson(e as Map<String, dynamic>))
           .toList(),
       creatorName: createdBy.isNotEmpty ? (createdBy.first['name'] as String?) : null,
+      imdbId: j['imdb_id'] as String? ??
+          (j['external_ids'] as Map<String, dynamic>?)?['imdb_id'] as String?,
       seasons: seasonsRaw
           .map((e) => SeasonSummary.fromJson(e as Map<String, dynamic>))
           .where((s) => s.seasonNumber > 0)

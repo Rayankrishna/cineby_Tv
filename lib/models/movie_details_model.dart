@@ -67,7 +67,8 @@ class MovieDetails {
             : List<Genre>.from(json["genres"].map((x) => Genre.fromJson(x))),
         homepage: json["homepage"],
         id: json["id"],
-        imdbId: json["imdb_id"],
+        imdbId: json["imdb_id"] ??
+            (json["external_ids"] as Map<String, dynamic>?)?["imdb_id"],
         originCountry: json["origin_country"] == null
             ? null
             : List<String>.from(json["origin_country"].map((x) => x)),

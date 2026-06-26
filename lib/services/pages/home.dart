@@ -1,6 +1,7 @@
 import 'package:cineby_tv/models/history_item.dart';
 import 'package:cineby_tv/models/search_model.dart';
 import 'package:cineby_tv/services/config.dart';
+import 'package:cineby_tv/services/pages/browse_results_page.dart';
 import 'package:cineby_tv/services/pages/details.dart';
 import 'package:cineby_tv/stores/search_store.dart';
 import 'package:cineby_tv/stores/stores.dart';
@@ -25,6 +26,15 @@ class _MyHomePageState extends State<MyHomePage> {
     super.initState();
     _searchStore.fetchTrendingResults();
     historyStore.fetchContinueWatching();
+    // Pull full history, then seed the "For You" rail from it.
+    historyStore.fetch().then((_) => _loadForYou());
+  }
+
+  Future<void> _loadForYou() async {
+    final seeds = historyStore.items
+        .map((h) => (tmdbId: h.tmdbId, mediaType: h.mediaType))
+        .toList();
+    await _searchStore.fetchForYou(seeds);
   }
 
   @override
@@ -58,6 +68,13 @@ class _MyHomePageState extends State<MyHomePage> {
                   title: 'Continue Watching',
                   items: historyStore.continueWatching,
                 ),
+              if (_searchStore.forYou.isNotEmpty)
+                _SliverRow(
+                  title: 'For You',
+                  items: _searchStore.forYou,
+                  defaultMediaType: 'movie',
+                ),
+              const _SliverCategoriesRow(),
               if (trending.isNotEmpty)
                 _SliverRow(title: 'Trending Now', items: trending, defaultMediaType: 'movie'),
               if (_searchStore.topMovies.isNotEmpty)
@@ -759,6 +776,172 @@ class _PosterCard extends StatelessWidget {
         }),
         );
       }),
+    );
+  }
+}
+
+// ============== CATEGORIES (BROWSE BY GENRE) ==============
+// A horizontal rail of focusable genre chips — the TV-friendly equivalent of
+// the phone's "Categories" picker. Selecting one opens the paginated
+// GenreResultsPage for that genre.
+class _SliverCategoriesRow extends StatelessWidget {
+  const _SliverCategoriesRow();
+
+  static const List<(int, String)> _genres = [
+    (28, 'Action'),
+    (12, 'Adventure'),
+    (16, 'Animation'),
+    (35, 'Comedy'),
+    (80, 'Crime'),
+    (99, 'Documentary'),
+    (18, 'Drama'),
+    (10751, 'Family'),
+    (14, 'Fantasy'),
+    (36, 'History'),
+    (27, 'Horror'),
+    (10402, 'Music'),
+    (9648, 'Mystery'),
+    (10749, 'Romance'),
+    (878, 'Science Fiction'),
+    (53, 'Thriller'),
+    (10752, 'War'),
+    (37, 'Western'),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return SliverToBoxAdapter(
+      child: Padding(
+        padding: EdgeInsets.only(top: 28.s(context)),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: EdgeInsets.only(
+                left: 40.s(context),
+                bottom: 10.s(context),
+              ),
+              child: Text(
+                'Categories',
+                style: TextStyle(
+                  color: kTextWhite,
+                  fontSize: 18.s(context),
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.2.s(context),
+                ),
+              ),
+            ),
+            SizedBox(
+              height: 64.s(context),
+              child: ListView.builder(
+                padding: EdgeInsets.symmetric(horizontal: 40.s(context)),
+                scrollDirection: Axis.horizontal,
+                clipBehavior: Clip.none,
+                // +1 for the leading Anime chip (TV discover, not a plain
+                // movie genre).
+                itemCount: _genres.length + 1,
+                itemBuilder: (ctx, i) {
+                  final pad = EdgeInsets.symmetric(
+                    horizontal: 6.s(context),
+                    vertical: 8.s(context),
+                  );
+                  if (i == 0) {
+                    return Padding(
+                      padding: pad,
+                      child: _CategoryChip(
+                        label: 'Anime',
+                        onTap: () => Navigator.push(
+                          ctx,
+                          MaterialPageRoute(
+                            builder: (_) => const GenreResultsPage(
+                              genreId: 16,
+                              genreName: 'Anime',
+                              mediaType: 'tv',
+                              extraQuery: '&with_origin_country=JP|CN',
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  }
+                  final g = _genres[i - 1];
+                  return Padding(
+                    padding: pad,
+                    child: _CategoryChip(
+                      label: g.$2,
+                      onTap: () => Navigator.push(
+                        ctx,
+                        MaterialPageRoute(
+                          builder: (_) => GenreResultsPage(
+                            genreId: g.$1,
+                            genreName: g.$2,
+                            mediaType: 'movie',
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CategoryChip extends StatefulWidget {
+  final String label;
+  final VoidCallback onTap;
+  const _CategoryChip({required this.label, required this.onTap});
+
+  @override
+  State<_CategoryChip> createState() => _CategoryChipState();
+}
+
+class _CategoryChipState extends State<_CategoryChip> {
+  bool _focused = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Focus(
+      onFocusChange: (f) => setState(() => _focused = f),
+      onKeyEvent: (n, e) {
+        if (e is KeyDownEvent &&
+            (e.logicalKey == LogicalKeyboardKey.select ||
+                e.logicalKey == LogicalKeyboardKey.enter ||
+                e.logicalKey == LogicalKeyboardKey.space)) {
+          widget.onTap();
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          curve: Curves.easeOut,
+          alignment: Alignment.center,
+          padding: EdgeInsets.symmetric(horizontal: 22.s(context)),
+          decoration: BoxDecoration(
+            color: _focused ? kNetflixRed : Colors.white12,
+            borderRadius: BorderRadius.circular(100),
+            border: Border.all(
+              color: _focused ? kNetflixRed : Colors.white24,
+              width: 2,
+            ),
+          ),
+          child: Text(
+            widget.label,
+            style: TextStyle(
+              color: kTextWhite,
+              fontSize: 14.s(context),
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

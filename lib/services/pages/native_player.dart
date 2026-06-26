@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:cineby_tv/services/config.dart';
 import 'package:cineby_tv/services/pages/webview.dart';
 import 'package:cineby_tv/services/stream_servers.dart';
+import 'package:cineby_tv/services/subtitle_service.dart';
 import 'package:cineby_tv/stores/stores.dart';
 import 'package:cineby_tv/utils/tv_scale.dart';
 import 'package:flutter/material.dart';
@@ -15,6 +16,7 @@ class NativePlayerPage extends StatefulWidget {
   final String videoUrl;
   final Map<String, String> httpHeaders;
   final String? subtitleUrl;
+  final String? imdbId; // for subtitle lookup (YIFY + OpenSubtitles)
   final String? title;
   final int? tmdbId;
   final String mediaType;
@@ -30,6 +32,7 @@ class NativePlayerPage extends StatefulWidget {
     required this.videoUrl,
     this.httpHeaders = const {},
     this.subtitleUrl,
+    this.imdbId,
     this.title,
     this.tmdbId,
     this.mediaType = 'movie',
@@ -51,6 +54,14 @@ class _NativePlayerPageState extends State<NativePlayerPage> {
   bool _initialized = false;
   bool _showControls = true;
   bool _showSubtitles = true;
+  // English-by-default tracks: YIFY (movies) + OpenSubtitles (movies + TV),
+  // by IMDb id. Best-ranked first; the first is auto-selected as the default.
+  List<SubtitleTrack> _subTracks = [];
+  // Active subtitle key: captured URL OR a SubtitleTrack.key. null = Off.
+  String? _activeSubKey;
+  // True once the user manually picks a track, so the async English
+  // auto-select doesn't override their choice.
+  bool _userPickedSub = false;
   bool _hasError = false;
   String? _errorMessage;
   Timer? _hideTimer;
@@ -92,7 +103,7 @@ class _NativePlayerPageState extends State<NativePlayerPage> {
       await _controller.play();
 
       if (widget.subtitleUrl != null && widget.subtitleUrl!.isNotEmpty) {
-        await _loadSubtitles(widget.subtitleUrl!);
+        await _loadSubtitles(widget.subtitleUrl!, userInitiated: false);
       }
 
       _controller.addListener(_handleVideoError);
@@ -104,6 +115,9 @@ class _NativePlayerPageState extends State<NativePlayerPage> {
           _initialized = true;
         });
         _focusNode.requestFocus();
+        // Fetch English subtitles (YIFY + OpenSubtitles) in the background and
+        // auto-select the best as the default.
+        _loadSubtitleTracks();
       }
     } catch (e) {
       if (mounted) {
@@ -125,15 +139,83 @@ class _NativePlayerPageState extends State<NativePlayerPage> {
     }
   }
 
-  Future<void> _loadSubtitles(String url) async {
+  /// Load a captured iframe subtitle URL (.srt or .vtt → normalised to VTT).
+  Future<void> _loadSubtitles(String url, {bool userInitiated = true}) async {
+    if (userInitiated) _userPickedSub = true;
     try {
-      final response = await http.get(Uri.parse(url), headers: widget.httpHeaders);
+      final response =
+          await http.get(Uri.parse(url), headers: widget.httpHeaders);
       if (response.statusCode == 200) {
-        final caption = WebVTTCaptionFile(response.body);
-        await _controller.setClosedCaptionFile(Future.value(caption));
+        final body = response.body;
+        // A captured "subtitle" URL is often an HTML page or non-subtitle
+        // resource — never feed that to the caption parser.
+        if (looksLikeHtml(body) ||
+            (!body.contains('-->') &&
+                !body.trimLeft().startsWith('WEBVTT'))) {
+          return;
+        }
+        final vtt = body.trimLeft().startsWith('WEBVTT')
+            ? body
+            : SubtitleService.instance.srtToVtt(body);
+        await _controller.setClosedCaptionFile(Future.value(WebVTTCaptionFile(vtt)));
+        if (mounted) {
+          setState(() {
+            _activeSubKey = url;
+            _showSubtitles = true;
+          });
+        }
       }
     } catch (_) {
       // Subtitle load failed — keep playing without them.
+    }
+  }
+
+  /// Select a fetched subtitle track (YIFY or OpenSubtitles): resolve it to
+  /// WebVTT via the service and apply it.
+  Future<void> _setTrack(SubtitleTrack t, {bool userInitiated = true}) async {
+    if (userInitiated) _userPickedSub = true;
+    setState(() {
+      _activeSubKey = t.key;
+      _showSubtitles = true;
+    });
+    final vtt = await SubtitleService.instance.vttForTrack(t);
+    if (vtt != null && mounted) {
+      await _controller
+          .setClosedCaptionFile(Future.value(WebVTTCaptionFile(vtt)));
+    }
+  }
+
+  /// Turn subtitles off (clear the caption track).
+  Future<void> _clearSubtitles({bool userInitiated = true}) async {
+    if (userInitiated) _userPickedSub = true;
+    setState(() {
+      _activeSubKey = null;
+      _showSubtitles = false;
+    });
+    await _controller
+        .setClosedCaptionFile(Future.value(WebVTTCaptionFile('WEBVTT\n\n')));
+  }
+
+  /// Fetch English subtitle tracks — YIFY for movies, OpenSubtitles for movies
+  /// and TV episodes (by IMDb id from the detail response) — and auto-select
+  /// the best as default (unless the user already chose a track).
+  Future<void> _loadSubtitleTracks() async {
+    final id = widget.tmdbId;
+    final imdb = widget.imdbId;
+    if ((imdb == null || imdb.isEmpty) && id == null) return;
+    final tracks = await SubtitleService.instance.englishTracks(
+      imdbId: imdb,
+      tmdbId: id,
+      mediaType: widget.mediaType,
+      seasonNumber: widget.seasonNumber,
+      episodeNumber: widget.episodeNumber,
+    );
+    debugPrint('[SUBS] player: ${tracks.length} english tracks '
+        '(imdb=$imdb tmdb=$id s=${widget.seasonNumber} e=${widget.episodeNumber})');
+    if (!mounted || tracks.isEmpty) return;
+    setState(() => _subTracks = tracks);
+    if (!_userPickedSub) {
+      await _setTrack(tracks.first, userInitiated: false);
     }
   }
 
@@ -211,7 +293,17 @@ class _NativePlayerPageState extends State<NativePlayerPage> {
   }
 
   void _toggleSubtitles() {
-    setState(() => _showSubtitles = !_showSubtitles);
+    // Toggle between Off and the best available track (fetched English first,
+    // else the captured iframe sub).
+    if (_showSubtitles && _activeSubKey != null) {
+      _clearSubtitles();
+    } else if (_subTracks.isNotEmpty) {
+      _setTrack(_subTracks.first);
+    } else if (widget.subtitleUrl != null && widget.subtitleUrl!.isNotEmpty) {
+      _loadSubtitles(widget.subtitleUrl!);
+    } else {
+      setState(() => _showSubtitles = !_showSubtitles);
+    }
     _revealControls();
   }
 
@@ -340,20 +432,43 @@ class _NativePlayerPageState extends State<NativePlayerPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   _OptionsHeader(
-                      icon: Icons.settings_rounded, label: 'Player options'),
-                  // Subtitles toggle — focusable and works with ENTER.
+                      icon: Icons.closed_caption, label: 'Subtitles'),
+                  // Off + every available track (yify English first, then any
+                  // captured iframe sub). ENTER selects.
                   _OptionsRow(
-                    label: 'Subtitles',
-                    icon: _showSubtitles
-                        ? Icons.closed_caption
-                        : Icons.closed_caption_off,
-                    autofocus: true,
-                    trailing: _showSubtitles ? 'On' : 'Off',
+                    label: 'Off',
+                    icon: Icons.closed_caption_off,
+                    autofocus: _activeSubKey == null,
+                    trailing: _activeSubKey == null ? 'On' : null,
                     onTap: () {
-                      _toggleSubtitles();
+                      _clearSubtitles();
                       setSheetState(() {});
                     },
                   ),
+                  for (final t in _subTracks)
+                    _OptionsRow(
+                      label: t.label,
+                      icon: Icons.closed_caption,
+                      autofocus: _activeSubKey == t.key,
+                      trailing: _activeSubKey == t.key ? 'On' : null,
+                      onTap: () {
+                        _setTrack(t);
+                        setSheetState(() {});
+                      },
+                    ),
+                  if (widget.subtitleUrl != null &&
+                      widget.subtitleUrl!.isNotEmpty)
+                    _OptionsRow(
+                      label: 'Embedded',
+                      icon: Icons.closed_caption,
+                      autofocus: _activeSubKey == widget.subtitleUrl,
+                      trailing:
+                          _activeSubKey == widget.subtitleUrl ? 'On' : null,
+                      onTap: () {
+                        _loadSubtitles(widget.subtitleUrl!);
+                        setSheetState(() {});
+                      },
+                    ),
                   SizedBox(height: 8.s(context)),
                   _OptionsHeader(icon: Icons.dns_rounded, label: 'Source'),
                   for (final s in streamServers)
@@ -446,7 +561,10 @@ class _NativePlayerPageState extends State<NativePlayerPage> {
               _buildSeekHint(context),
 
             if (_initialized && !_hasError && _showControls)
-              _buildControls(context),
+              ValueListenableBuilder<VideoPlayerValue>(
+                valueListenable: _controller,
+                builder: (_, __, ___) => _buildControls(context),
+              ),
           ],
         ),
       ),

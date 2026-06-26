@@ -3,7 +3,6 @@ import 'package:cineby_tv/models/tv_detail_model.dart';
 import 'package:cineby_tv/services/config.dart';
 import 'package:cineby_tv/services/pages/browse_results_page.dart';
 import 'package:cineby_tv/services/pages/webview.dart';
-import 'package:cineby_tv/services/stream_servers.dart';
 import 'package:cineby_tv/stores/search_store.dart';
 import 'package:cineby_tv/stores/stores.dart';
 import 'package:cineby_tv/stores/tv_detail_store.dart';
@@ -32,11 +31,6 @@ class _MovieDetailsPageState extends State<MovieDetailsPage> {
 
   HistoryItem? _resume;
   bool _inWatchlist = false;
-  bool _checkingSource = false;
-
-  // Which stream provider to use. null = Auto (probe for the first reachable
-  // one); a non-null value is an explicit user choice used as-is.
-  StreamServer? _selectedServer;
 
   int get _tmdbId => int.tryParse(widget.movieId) ?? 0;
   bool get _isTv => widget.mediaType == 'tv';
@@ -57,9 +51,6 @@ class _MovieDetailsPageState extends State<MovieDetailsPage> {
     }
     watchlistStore.checkContains(_tmdbId, widget.mediaType).then((in_) {
       if (mounted) setState(() => _inWatchlist = in_);
-    });
-    loadSelectedServer().then((s) {
-      if (mounted) setState(() => _selectedServer = s);
     });
   }
 
@@ -95,17 +86,12 @@ class _MovieDetailsPageState extends State<MovieDetailsPage> {
               runtime: movie.runtime != null ? '${movie.runtime}m' : null,
               overview: movie.overview,
               voteAverage: movie.voteAverage,
-              actions: Opacity(
-                // Dim the action row while the pre-flight reachability
-                // probe runs so the user sees something is happening.
-                opacity: _checkingSource ? 0.5 : 1.0,
-                child: _buildActions(
+              actions: _buildActions(
                 onPlay: () => _playMovie(),
                 onResume: _resume != null && !(_resume!.completed)
                     ? () => _playMovie(seekTo: _resume!.progressSeconds)
                     : null,
                 resumeSeconds: _resume?.progressSeconds,
-              ),
               ),
             ),
           ),
@@ -158,11 +144,7 @@ class _MovieDetailsPageState extends State<MovieDetailsPage> {
                   : null,
               overview: tv.overview,
               voteAverage: tv.voteAverage,
-              actions: Opacity(
-                // Dim the action row while the pre-flight reachability
-                // probe runs so the user sees something is happening.
-                opacity: _checkingSource ? 0.5 : 1.0,
-                child: _buildActions(
+              actions: _buildActions(
                 onPlay: () => _playFirstAvailableEpisode(tv),
                 onResume: _resume != null
                     ? () => _playEpisode(
@@ -176,7 +158,6 @@ class _MovieDetailsPageState extends State<MovieDetailsPage> {
                 resumeBadge: _resume != null && _resume!.mediaType == 'tv'
                     ? 'S${_resume!.seasonNumber} • E${_resume!.episodeNumber}'
                     : null,
-              ),
               ),
             ),
           ),
@@ -288,14 +269,6 @@ class _MovieDetailsPageState extends State<MovieDetailsPage> {
               ),
             ],
           ),
-          SizedBox(height: 22.s(context)),
-          _ServerSelector(
-            selected: _selectedServer,
-            onSelected: (s) {
-              setState(() => _selectedServer = s);
-              saveSelectedServer(s); // persist the choice across the app
-            },
-          ),
         ],
       );
     });
@@ -327,55 +300,17 @@ class _MovieDetailsPageState extends State<MovieDetailsPage> {
     if (mounted) setState(() => _inWatchlist = now);
   }
 
+  // No source picking — MyWidget races every provider and uses whichever
+  // returns a stream first.
   void _playMovie({int seekTo = 0}) {
-    _doPlayMovie(seekTo: seekTo);
-  }
-
-  /// Resolve which provider to launch: an explicit user pick (`_selectedServer`)
-  /// is used as-is; otherwise probe providers in order for the first reachable
-  /// one. Returns null (and shows a message) when nothing is reachable.
-  Future<StreamServer?> _resolveServer({
-    required String mediaType,
-    int? seasonNumber,
-    int? episodeNumber,
-  }) async {
-    final picked = _selectedServer;
-    if (picked != null) return picked;
-    setState(() => _checkingSource = true);
-    final server = await findReachableServer(
-      tmdbId: _tmdbId,
-      mediaType: mediaType,
-      seasonNumber: seasonNumber,
-      episodeNumber: episodeNumber,
-    );
-    if (!mounted) return null;
-    setState(() => _checkingSource = false);
-    if (server == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          backgroundColor: Color(0xFF1F1E26),
-          content: Text(
-            'No sources are reachable right now. '
-            'Check your connection and try again.',
-          ),
-        ),
-      );
-    }
-    return server;
-  }
-
-  Future<void> _doPlayMovie({int seekTo = 0}) async {
     final m = _movieStore.movieDetails;
-    final server = await _resolveServer(mediaType: 'movie');
-    if (server == null || !mounted) return;
-    final url = server.buildUrl(_tmdbId, 'movie', null, null);
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => MyWidget(
-          url: url,
           tmdbId: _tmdbId,
           mediaType: 'movie',
+          imdbId: m?.imdbId,
           initialProgressSeconds: seekTo,
           title: m?.title,
           posterPath: m?.posterPath,
@@ -391,25 +326,13 @@ class _MovieDetailsPageState extends State<MovieDetailsPage> {
   }
 
   void _playEpisode(TvDetail tv, int season, int episode, {int seekTo = 0}) {
-    _doPlayEpisode(tv, season, episode, seekTo: seekTo);
-  }
-
-  Future<void> _doPlayEpisode(TvDetail tv, int season, int episode,
-      {int seekTo = 0}) async {
-    final server = await _resolveServer(
-      mediaType: 'tv',
-      seasonNumber: season,
-      episodeNumber: episode,
-    );
-    if (server == null || !mounted) return;
-    final url = server.buildUrl(_tmdbId, 'tv', season, episode);
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => MyWidget(
-          url: url,
           tmdbId: _tmdbId,
           mediaType: 'tv',
+          imdbId: tv.imdbId,
           seasonNumber: season,
           episodeNumber: episode,
           initialProgressSeconds: seekTo,
@@ -458,124 +381,6 @@ class _MovieDetailsPageState extends State<MovieDetailsPage> {
         itemCount: cast.length,
         itemBuilder: (ctx, i) => _CastCard(actor: cast[i]),
       ),
-    );
-  }
-}
-
-// ============== SERVER SELECTOR ==============
-class _ServerSelector extends StatelessWidget {
-  final StreamServer? selected; // null = Auto
-  final ValueChanged<StreamServer?> onSelected;
-  const _ServerSelector({required this.selected, required this.onSelected});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Row(
-          children: [
-            Icon(Icons.dns_outlined, color: kTextGrey, size: 15.s(context)),
-            SizedBox(width: 6.s(context)),
-            Text(
-              'SOURCE',
-              style: TextStyle(
-                color: kTextGrey,
-                fontSize: 12.s(context),
-                fontWeight: FontWeight.w800,
-                letterSpacing: 2.s(context),
-              ),
-            ),
-          ],
-        ),
-        SizedBox(height: 10.s(context)),
-        Wrap(
-          spacing: 10.s(context),
-          runSpacing: 10.s(context),
-          children: [
-            _ServerChip(
-              label: 'Auto',
-              selected: selected == null,
-              onSelected: () => onSelected(null),
-            ),
-            for (final s in streamServers)
-              _ServerChip(
-                label: s.name,
-                selected: selected?.name == s.name,
-                onSelected: () => onSelected(s),
-              ),
-          ],
-        ),
-      ],
-    );
-  }
-}
-
-class _ServerChip extends StatelessWidget {
-  final String label;
-  final bool selected;
-  final VoidCallback onSelected;
-  const _ServerChip({
-    required this.label,
-    required this.selected,
-    required this.onSelected,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Focus(
-      onKeyEvent: (n, e) {
-        if (e is KeyDownEvent &&
-            (e.logicalKey == LogicalKeyboardKey.select ||
-                e.logicalKey == LogicalKeyboardKey.enter ||
-                e.logicalKey == LogicalKeyboardKey.space)) {
-          onSelected();
-          return KeyEventResult.handled;
-        }
-        return KeyEventResult.ignored;
-      },
-      child: Builder(builder: (ctx) {
-        final focused = Focus.of(ctx).hasFocus;
-        return GestureDetector(
-          onTap: onSelected,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 150),
-            curve: Curves.easeOut,
-            padding: EdgeInsets.symmetric(
-              horizontal: 16.s(context),
-              vertical: 8.s(context),
-            ),
-            decoration: BoxDecoration(
-              color: selected
-                  ? kNetflixRed
-                  : (focused ? Colors.white24 : Colors.white.withOpacity(0.10)),
-              borderRadius: BorderRadius.circular(20.s(context)),
-              border: Border.all(
-                color: focused ? kTextWhite : Colors.transparent,
-                width: 2.s(context),
-              ),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (selected) ...[
-                  Icon(Icons.check, size: 14.s(context), color: kTextWhite),
-                  SizedBox(width: 6.s(context)),
-                ],
-                Text(
-                  label,
-                  style: TextStyle(
-                    color: kTextWhite,
-                    fontSize: 13.s(context),
-                    fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      }),
     );
   }
 }

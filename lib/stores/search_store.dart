@@ -46,6 +46,11 @@ abstract class _SearchStore with Store {
   @observable
   ObservableList<SearchResult> romanceMovies = ObservableList<SearchResult>();
 
+  // "For You" — TMDB recommendations seeded from the user's watch history,
+  // popularity-ranked.
+  @observable
+  ObservableList<SearchResult> forYou = ObservableList<SearchResult>();
+
   @observable
   String? errorMessage;
 
@@ -175,6 +180,55 @@ abstract class _SearchStore with Store {
       errorMessage = e.toString();
     } finally {
       isLoading = false;
+    }
+  }
+
+  /// Build the "For You" rail from the user's watch history. For each of the
+  /// most recent [seeds] pull TMDB recommendations, then merge → drop
+  /// unreleased → drop already-watched → dedupe → rank by popularity.
+  @action
+  Future<void> fetchForYou(List<({int tmdbId, String mediaType})> seeds) async {
+    if (seeds.isEmpty) {
+      forYou = ObservableList<SearchResult>();
+      return;
+    }
+    final seedIds = seeds.map((s) => s.tmdbId).toSet();
+    final picks = seeds.take(6).toList();
+    try {
+      final lists = await Future.wait(
+        picks.map((s) async {
+          try {
+            final res =
+                await tmdbDio.get(recommendationsUrl(s.tmdbId, s.mediaType));
+            if (res.statusCode != 200) return const <SearchResult>[];
+            return SearchResponse.fromJson(res.data).results;
+          } catch (_) {
+            return const <SearchResult>[];
+          }
+        }),
+      );
+      final now = DateTime.now();
+      final byId = <int, SearchResult>{};
+      for (final list in lists) {
+        for (final r in list) {
+          if (seedIds.contains(r.id)) continue;
+          if (r.posterPath == null) continue;
+          final date = r.releaseDate ?? r.firstAirDate;
+          if (date == null || date.isEmpty) continue;
+          final d = DateTime.tryParse(date);
+          if (d == null || d.isAfter(now)) continue;
+          byId.putIfAbsent(r.id, () => r);
+        }
+      }
+      final ranked = byId.values.toList()
+        ..sort((a, b) {
+          final vc = (b.voteCount ?? 0).compareTo(a.voteCount ?? 0);
+          if (vc != 0) return vc;
+          return (b.voteAverage ?? 0).compareTo(a.voteAverage ?? 0);
+        });
+      forYou = ObservableList.of(ranked.take(20).toList());
+    } catch (e) {
+      errorMessage = e.toString();
     }
   }
 
