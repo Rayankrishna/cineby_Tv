@@ -57,22 +57,31 @@ abstract class _SearchStore with Store {
   @observable
   MovieDetails? movieDetails;
 
+  // Bumped for every search so a slow response for an older query can't
+  // overwrite the results of a newer one.
+  int _searchSeq = 0;
+
   @action
   Future<void> setSearchQuery(String query) async {
     searchQuery = query;
-    if (query.isNotEmpty) {
+    if (query.trim().isNotEmpty) {
       await fetchSearchResults(query);
     } else {
+      _searchSeq++;
+      isLoading = false;
       searchResults.clear();
     }
   }
 
   @action
   Future<void> fetchSearchResults(String query) async {
+    final seq = ++_searchSeq;
     isLoading = true;
     errorMessage = null;
     try {
-      final response = await tmdbDio.get('$searchUrl$query');
+      final response = await tmdbDio
+          .get('$searchUrl${Uri.encodeQueryComponent(query.trim())}');
+      if (seq != _searchSeq) return;
       if (response.statusCode == 200) {
         final searchResponse = SearchResponse.fromJson(response.data);
         var results = searchResponse.results;
@@ -101,9 +110,9 @@ abstract class _SearchStore with Store {
         errorMessage = 'Failed to load results';
       }
     } catch (e) {
-      errorMessage = e.toString();
+      if (seq == _searchSeq) errorMessage = e.toString();
     } finally {
-      isLoading = false;
+      if (seq == _searchSeq) isLoading = false;
     }
   }
 

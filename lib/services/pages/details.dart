@@ -1,36 +1,71 @@
+import 'dart:async';
+
 import 'package:cineby_tv/models/history_item.dart';
+import 'package:cineby_tv/models/search_model.dart';
 import 'package:cineby_tv/models/tv_detail_model.dart';
 import 'package:cineby_tv/services/config.dart';
 import 'package:cineby_tv/services/pages/browse_results_page.dart';
 import 'package:cineby_tv/services/pages/webview.dart';
+import 'package:cineby_tv/services/tmdb_client.dart';
 import 'package:cineby_tv/stores/search_store.dart';
 import 'package:cineby_tv/stores/stores.dart';
 import 'package:cineby_tv/stores/tv_detail_store.dart';
 import 'package:cineby_tv/utils/tv_scale.dart';
+import 'package:cineby_tv/widgets/tv_focus.dart';
+import 'package:cineby_tv/widgets/tv_image.dart';
+import 'package:cineby_tv/widgets/tv_widgets.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_mobx/flutter_mobx.dart';
-import 'package:flutter/services.dart';
+
+/// What the card that opened this page already knows about the title. Shown
+/// immediately so the page never opens on a blank spinner.
+class DetailPreview {
+  const DetailPreview({
+    this.title,
+    this.backdropPath,
+    this.overview,
+    this.year,
+    this.rating,
+  });
+
+  final String? title;
+  final String? backdropPath;
+  final String? overview;
+  final String? year;
+  final double? rating;
+}
 
 class MovieDetailsPage extends StatefulWidget {
   final String movieId;
   final String mediaType; // 'movie' | 'tv'
+  final DetailPreview? preview;
 
   const MovieDetailsPage({
     super.key,
     required this.movieId,
     this.mediaType = 'movie',
+    this.preview,
   });
 
   @override
   State<MovieDetailsPage> createState() => _MovieDetailsPageState();
 }
 
+typedef _CastEntry =
+    ({int? id, String name, String? character, String? profilePath});
+
 class _MovieDetailsPageState extends State<MovieDetailsPage> {
   final SearchStore _movieStore = SearchStore();
   final TvDetailStore _tvStore = TvDetailStore();
+  final ScrollController _scroll = ScrollController();
 
   HistoryItem? _resume;
   bool _inWatchlist = false;
+  List<SearchResult> _similar = const [];
+
+  // Season the user has moved onto but whose episodes aren't requested yet.
+  int? _pendingSeason;
+  Timer? _seasonTimer;
 
   int get _tmdbId => int.tryParse(widget.movieId) ?? 0;
   bool get _isTv => widget.mediaType == 'tv';
@@ -38,247 +73,114 @@ class _MovieDetailsPageState extends State<MovieDetailsPage> {
   @override
   void initState() {
     super.initState();
-    if (_isTv) {
-      _tvStore.fetchTvDetail(_tmdbId);
-      historyStore.latestForShow(_tmdbId).then((h) {
-        if (mounted) setState(() => _resume = h);
-      });
-    } else {
-      _movieStore.fetchMovieDetails(widget.movieId);
-      historyStore.latestForMovie(_tmdbId).then((h) {
-        if (mounted) setState(() => _resume = h);
-      });
-    }
+    _loadDetails();
+    _refreshResume();
+    _loadSimilar();
     watchlistStore.checkContains(_tmdbId, widget.mediaType).then((in_) {
       if (mounted) setState(() => _inWatchlist = in_);
     });
   }
 
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: kDeepBlack,
-      body: _isTv ? _buildTv(context) : _buildMovie(context),
-    );
+  void dispose() {
+    _seasonTimer?.cancel();
+    _scroll.dispose();
+    super.dispose();
   }
 
-  // ============== MOVIE ==============
-  Widget _buildMovie(BuildContext context) {
-    return Observer(builder: (_) {
-      if (_movieStore.isLoading) {
-        return const Center(child: CircularProgressIndicator(color: kNetflixRed));
-      }
-      final movie = _movieStore.movieDetails;
-      if (movie == null) {
-        return _ErrorState(
-          onBack: () => Navigator.pop(context),
-          onRetry: () => _movieStore.fetchMovieDetails(widget.movieId),
-        );
-      }
-      return CustomScrollView(
-        slivers: [
-          SliverToBoxAdapter(
-            child: _HeroHeader(
-              backdropPath: movie.backdropPath,
-              title: movie.title ?? 'Untitled',
-              tagline: movie.tagline,
-              year: movie.releaseDate?.split('-').first,
-              runtime: movie.runtime != null ? '${movie.runtime}m' : null,
-              overview: movie.overview,
-              voteAverage: movie.voteAverage,
-              actions: _buildActions(
-                onPlay: () => _playMovie(),
-                onResume: _resume != null && !(_resume!.completed)
-                    ? () => _playMovie(seekTo: _resume!.progressSeconds)
-                    : null,
-                resumeSeconds: _resume?.progressSeconds,
-              ),
-            ),
-          ),
-          if (movie.genres != null && movie.genres!.isNotEmpty) ...[
-            SliverToBoxAdapter(child: _sectionTitle(context, 'Genres')),
-            SliverToBoxAdapter(
-              child: _buildGenreChips(
-                context,
-                movie.genres!
-                    .map((g) => (id: g.id ?? 0, name: g.name ?? ''))
-                    .where((g) => g.id != 0 && g.name.isNotEmpty)
-                    .toList(),
-                'movie',
-              ),
-            ),
-          ],
-          if (movie.credits?.cast != null && movie.credits!.cast!.isNotEmpty) ...[
-            SliverToBoxAdapter(child: _sectionTitle(context, 'Cast')),
-            SliverToBoxAdapter(child: _buildCast(context, movie.credits!.cast!)),
-          ],
-          SliverPadding(padding: EdgeInsets.only(bottom: 60.s(context))),
-        ],
+  void _loadDetails() {
+    if (_isTv) {
+      _tvStore.fetchTvDetail(_tmdbId);
+    } else {
+      _movieStore.fetchMovieDetails(widget.movieId);
+    }
+  }
+
+  Future<void> _refreshResume() async {
+    final h =
+        _isTv
+            ? await historyStore.latestForShow(_tmdbId)
+            : await historyStore.latestForMovie(_tmdbId);
+    if (mounted) setState(() => _resume = h);
+  }
+
+  Future<void> _loadSimilar() async {
+    try {
+      final res = await tmdbDio.get(
+        recommendationsUrl(_tmdbId, widget.mediaType),
       );
-    });
+      final now = DateTime.now();
+      final items =
+          SearchResponse.fromJson(res.data).results.where((r) {
+            if (r.posterPath == null) return false;
+            final date = DateTime.tryParse(
+              r.releaseDate ?? r.firstAirDate ?? '',
+            );
+            return date != null && !date.isAfter(now);
+          }).toList();
+      for (final r in items) {
+        r.mediaType ??= widget.mediaType;
+      }
+      if (mounted) setState(() => _similar = items);
+    } catch (_) {
+      // Recommendations are a nice-to-have; the page works without them.
+    }
   }
 
-  // ============== TV ==============
-  Widget _buildTv(BuildContext context) {
-    return Observer(builder: (_) {
-      if (_tvStore.isLoading) {
-        return const Center(child: CircularProgressIndicator(color: kNetflixRed));
-      }
-      final tv = _tvStore.tvDetail;
-      if (tv == null) {
-        return _ErrorState(
-          onBack: () => Navigator.pop(context),
-          onRetry: () => _tvStore.fetchTvDetail(_tmdbId),
-        );
-      }
-      return CustomScrollView(
-        slivers: [
-          SliverToBoxAdapter(
-            child: _HeroHeader(
+  // ============== PLAYBACK ==============
+
+  // No source picking — MyWidget races every provider and uses whichever
+  // returns a stream first.
+  void _playMovie({int seekTo = 0}) {
+    final m = _movieStore.movieDetails;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder:
+            (_) => MyWidget(
+              tmdbId: _tmdbId,
+              mediaType: 'movie',
+              imdbId: m?.imdbId,
+              initialProgressSeconds: seekTo,
+              title: m?.title,
+              posterPath: m?.posterPath,
+              backdropPath: m?.backdropPath,
+            ),
+      ),
+    ).then((_) => _afterPlayback());
+  }
+
+  void _playFirstAvailableEpisode(TvDetail tv) {
+    final season = tv.seasons.isNotEmpty ? tv.seasons.first.seasonNumber : 1;
+    _playEpisode(tv, season, 1);
+  }
+
+  void _playEpisode(TvDetail tv, int season, int episode, {int seekTo = 0}) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder:
+            (_) => MyWidget(
+              tmdbId: _tmdbId,
+              mediaType: 'tv',
+              imdbId: tv.imdbId,
+              seasonNumber: season,
+              episodeNumber: episode,
+              initialProgressSeconds: seekTo,
+              title: tv.name,
+              posterPath: tv.posterPath,
               backdropPath: tv.backdropPath,
-              title: tv.name ?? 'Untitled',
-              tagline: tv.tagline,
-              year: tv.firstAirDate?.split('-').first,
-              runtime: tv.numberOfSeasons != null
-                  ? '${tv.numberOfSeasons} season${tv.numberOfSeasons == 1 ? '' : 's'}'
-                  : null,
-              overview: tv.overview,
-              voteAverage: tv.voteAverage,
-              actions: _buildActions(
-                onPlay: () => _playFirstAvailableEpisode(tv),
-                onResume: _resume != null
-                    ? () => _playEpisode(
-                          tv,
-                          _resume!.seasonNumber ?? 1,
-                          _resume!.episodeNumber ?? 1,
-                          seekTo: _resume!.progressSeconds,
-                        )
-                    : null,
-                resumeSeconds: _resume?.progressSeconds,
-                resumeBadge: _resume != null && _resume!.mediaType == 'tv'
-                    ? 'S${_resume!.seasonNumber} • E${_resume!.episodeNumber}'
-                    : null,
-              ),
             ),
-          ),
-          SliverToBoxAdapter(child: _sectionTitle(context, 'Episodes')),
-          SliverToBoxAdapter(child: _EpisodePicker(store: _tvStore, tv: tv, onPlay: _playEpisode)),
-          if (tv.genres.isNotEmpty) ...[
-            SliverToBoxAdapter(child: _sectionTitle(context, 'Genres')),
-            SliverToBoxAdapter(
-              child: _buildGenreChips(
-                context,
-                tv.genres.map((g) => (id: g.id, name: g.name)).toList(),
-                'tv',
-              ),
-            ),
-          ],
-          if (tv.cast.isNotEmpty) ...[
-            SliverToBoxAdapter(child: _sectionTitle(context, 'Cast')),
-            SliverToBoxAdapter(child: _buildCastTv(context, tv.cast)),
-          ],
-          SliverPadding(padding: EdgeInsets.only(bottom: 60.s(context))),
-        ],
-      );
-    });
-  }
-
-  /// Horizontal row of focusable genre chips. Tap (or D-pad ENTER) opens
-  /// the genre's browse page. Caller passes lightweight (id, name) records
-  /// so we don't depend on either of the two `Genre` classes (movie + TV
-  /// models declare their own).
-  Widget _buildGenreChips(
-    BuildContext context,
-    List<({int id, String name})> genres,
-    String mediaType,
-  ) {
-    return Padding(
-      padding: EdgeInsets.fromLTRB(
-        40.s(context),
-        4.s(context),
-        40.s(context),
-        4.s(context),
       ),
-      child: Wrap(
-        spacing: 10.s(context),
-        runSpacing: 10.s(context),
-        children: genres
-            .map((g) => _GenreChip(
-                  label: g.name,
-                  onTap: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => GenreResultsPage(
-                        genreId: g.id,
-                        genreName: g.name,
-                        mediaType: mediaType,
-                      ),
-                    ),
-                  ),
-                ))
-            .toList(),
-      ),
-    );
+    ).then((_) => _afterPlayback());
   }
 
-  // ============== ACTIONS ==============
-  Widget _buildActions({
-    required VoidCallback onPlay,
-    VoidCallback? onResume,
-    int? resumeSeconds,
-    String? resumeBadge,
-  }) {
-    return Builder(builder: (context) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              if (onResume != null) ...[
-                _ActionButton(
-                  label: 'Resume${resumeBadge != null ? "  $resumeBadge" : ""}',
-                  icon: Icons.play_arrow,
-                  isPrimary: true,
-                  autofocus: true,
-                  onPressed: onResume,
-                  subLabel:
-                      resumeSeconds != null ? _fmtSeconds(resumeSeconds) : null,
-                ),
-                SizedBox(width: 16.s(context)),
-                _ActionButton(
-                  label: 'Play from start',
-                  icon: Icons.replay,
-                  isPrimary: false,
-                  onPressed: onPlay,
-                ),
-              ] else
-                _ActionButton(
-                  label: _isTv ? 'Watch S1·E1' : 'Play',
-                  icon: Icons.play_arrow,
-                  isPrimary: true,
-                  autofocus: true,
-                  onPressed: onPlay,
-                ),
-              SizedBox(width: 16.s(context)),
-              _ActionButton(
-                label: _inWatchlist ? 'In Watchlist' : 'Add to Watchlist',
-                icon: _inWatchlist ? Icons.bookmark : Icons.bookmark_border,
-                isPrimary: false,
-                onPressed: _toggleWatchlist,
-              ),
-            ],
-          ),
-        ],
-      );
-    });
-  }
-
-  String _fmtSeconds(int s) {
-    final h = s ~/ 3600;
-    final m = (s % 3600) ~/ 60;
-    if (h > 0) return '${h}h ${m}m in';
-    return '${m}m in';
+  /// Coming back from the player: pick up the new resume point here and in
+  /// the home screen's Continue Watching row.
+  void _afterPlayback() {
+    if (!mounted) return;
+    _refreshResume();
+    historyStore.fetchContinueWatching();
   }
 
   Future<void> _toggleWatchlist() async {
@@ -300,438 +202,612 @@ class _MovieDetailsPageState extends State<MovieDetailsPage> {
     if (mounted) setState(() => _inWatchlist = now);
   }
 
-  // No source picking — MyWidget races every provider and uses whichever
-  // returns a stream first.
-  void _playMovie({int seekTo = 0}) {
-    final m = _movieStore.movieDetails;
+  void _selectSeason(TvDetail tv, int seasonNumber, {bool immediate = false}) {
+    _seasonTimer?.cancel();
+    if (_tvStore.selectedSeasonNumber == seasonNumber) {
+      if (_pendingSeason != null) setState(() => _pendingSeason = null);
+      return;
+    }
+    setState(() => _pendingSeason = seasonNumber);
+    void go() {
+      if (!mounted) return;
+      _tvStore.fetchSeason(tv.id, seasonNumber);
+      setState(() => _pendingSeason = null);
+    }
+
+    if (immediate) {
+      go();
+    } else {
+      // Don't fire a request for every season the user arrows past.
+      _seasonTimer = Timer(const Duration(milliseconds: 260), go);
+    }
+  }
+
+  void _openTitle(SearchResult r) {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => MyWidget(
-          tmdbId: _tmdbId,
-          mediaType: 'movie',
-          imdbId: m?.imdbId,
-          initialProgressSeconds: seekTo,
-          title: m?.title,
-          posterPath: m?.posterPath,
-          backdropPath: m?.backdropPath,
-        ),
+        builder:
+            (_) => MovieDetailsPage(
+              movieId: r.id.toString(),
+              mediaType: r.mediaType ?? widget.mediaType,
+              preview: DetailPreview(
+                title: r.title ?? r.name,
+                backdropPath: r.backdropPath,
+                overview: r.overview,
+                rating: r.voteAverage,
+              ),
+            ),
       ),
     );
   }
 
-  void _playFirstAvailableEpisode(TvDetail tv) {
-    final season = tv.seasons.isNotEmpty ? tv.seasons.first.seasonNumber : 1;
-    _playEpisode(tv, season, 1);
-  }
-
-  void _playEpisode(TvDetail tv, int season, int episode, {int seekTo = 0}) {
+  void _openGenre(int id, String name) {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => MyWidget(
-          tmdbId: _tmdbId,
-          mediaType: 'tv',
-          imdbId: tv.imdbId,
-          seasonNumber: season,
-          episodeNumber: episode,
-          initialProgressSeconds: seekTo,
-          title: tv.name,
-          posterPath: tv.posterPath,
-          backdropPath: tv.backdropPath,
-        ),
+        builder:
+            (_) => GenreResultsPage(
+              genreId: id,
+              genreName: name,
+              mediaType: widget.mediaType,
+            ),
       ),
     );
   }
 
-  Widget _sectionTitle(BuildContext context, String text) => Padding(
-        padding: EdgeInsets.only(
-          left: 60.s(context),
-          top: 40.s(context),
-          bottom: 16.s(context),
-        ),
-        child: Text(
-          text,
-          style: TextStyle(
-            color: kTextWhite,
-            fontSize: 24.s(context),
-            fontWeight: FontWeight.w800,
+  void _openPerson(_CastEntry actor) {
+    final id = actor.id;
+    if (id == null) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder:
+            (_) => PersonFilmographyPage(personId: id, personName: actor.name),
+      ),
+    );
+  }
+
+  // ============== BUILD ==============
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: kDeepBlack,
+      body: Observer(builder: (_) => _isTv ? _buildTv() : _buildMovie()),
+    );
+  }
+
+  Widget _buildMovie() {
+    final movie = _movieStore.movieDetails;
+    if (movie == null && !_movieStore.isLoading) return _buildError();
+
+    final preview = widget.preview;
+    final cast = <_CastEntry>[
+      for (final c in movie?.credits?.cast ?? const [])
+        if ((c.name ?? '').isNotEmpty)
+          (
+            id: c.id,
+            name: c.name!,
+            character: c.character,
+            profilePath: c.profilePath,
+          ),
+    ];
+    String? director;
+    for (final c in movie?.credits?.crew ?? const []) {
+      if (c.job == 'Director') {
+        director = c.name;
+        break;
+      }
+    }
+    final runtime = movie?.runtime;
+    final year = _year(movie?.releaseDate) ?? preview?.year;
+    final resume = _resume;
+    final canResume = resume != null && !resume.completed;
+
+    return _buildPage(
+      backdropPath: movie?.backdropPath ?? preview?.backdropPath,
+      hero: _DetailHero(
+        kind: 'FILM',
+        title: movie?.title ?? preview?.title ?? '',
+        tagline: movie?.tagline,
+        overview: movie?.overview ?? preview?.overview,
+        rating: movie?.voteAverage ?? preview?.rating,
+        meta: [
+          if (year != null) year,
+          if (runtime != null && runtime > 0) _formatRuntime(runtime),
+        ],
+        credits: [
+          if (cast.isNotEmpty)
+            ('Starring', cast.take(3).map((c) => c.name).join(', ')),
+          if (director != null) ('Director', director),
+        ],
+        actions:
+            movie == null
+                ? null
+                : [
+                  if (canResume) ...[
+                    TvButton(
+                      label: 'Resume',
+                      subLabel: _formatProgress(resume.progressSeconds),
+                      icon: Icons.play_arrow_rounded,
+                      autofocus: true,
+                      onPressed:
+                          () => _playMovie(seekTo: resume.progressSeconds),
+                    ),
+                    TvButton(
+                      label: 'Play from Start',
+                      icon: Icons.replay_rounded,
+                      onPressed: _playMovie,
+                    ),
+                  ] else
+                    TvButton(
+                      label: 'Play',
+                      icon: Icons.play_arrow_rounded,
+                      autofocus: true,
+                      onPressed: _playMovie,
+                    ),
+                  _watchlistButton(),
+                ],
+      ),
+      sections: [
+        if (movie != null) ...[
+          ..._commonSections(
+            cast: cast,
+            genres: [
+              for (final g in movie.genres ?? const [])
+                if (g.id != null && (g.name ?? '').isNotEmpty)
+                  (id: g.id!, name: g.name!),
+            ],
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildTv() {
+    final tv = _tvStore.tvDetail;
+    if (tv == null && !_tvStore.isLoading) return _buildError();
+
+    final preview = widget.preview;
+    final cast = <_CastEntry>[
+      for (final c in tv?.cast ?? const <CastMember>[])
+        if (c.name.isNotEmpty)
+          (
+            id: c.id,
+            name: c.name,
+            character: c.character,
+            profilePath: c.profilePath,
+          ),
+    ];
+    final seasons = tv?.numberOfSeasons;
+    final year = _year(tv?.firstAirDate) ?? preview?.year;
+    final resume = _resume;
+
+    return _buildPage(
+      backdropPath: tv?.backdropPath ?? preview?.backdropPath,
+      hero: _DetailHero(
+        kind: 'SERIES',
+        title: tv?.name ?? preview?.title ?? '',
+        tagline: tv?.tagline,
+        overview: tv?.overview ?? preview?.overview,
+        rating: tv?.voteAverage ?? preview?.rating,
+        meta: [
+          if (year != null) year,
+          if (seasons != null && seasons > 0)
+            '$seasons Season${seasons == 1 ? '' : 's'}',
+        ],
+        credits: [
+          if (cast.isNotEmpty)
+            ('Starring', cast.take(3).map((c) => c.name).join(', ')),
+          if (tv?.creatorName != null) ('Creator', tv!.creatorName!),
+        ],
+        actions:
+            tv == null
+                ? null
+                : [
+                  if (resume != null) ...[
+                    TvButton(
+                      label: 'Resume',
+                      subLabel:
+                          'S${resume.seasonNumber ?? 1} · E${resume.episodeNumber ?? 1}'
+                          ' · ${_formatProgress(resume.progressSeconds)}',
+                      icon: Icons.play_arrow_rounded,
+                      autofocus: true,
+                      onPressed:
+                          () => _playEpisode(
+                            tv,
+                            resume.seasonNumber ?? 1,
+                            resume.episodeNumber ?? 1,
+                            seekTo: resume.progressSeconds,
+                          ),
+                    ),
+                    TvButton(
+                      label: 'Play from Start',
+                      icon: Icons.replay_rounded,
+                      onPressed: () => _playFirstAvailableEpisode(tv),
+                    ),
+                  ] else
+                    TvButton(
+                      label: 'Play',
+                      subLabel: 'S1 · E1',
+                      icon: Icons.play_arrow_rounded,
+                      autofocus: true,
+                      onPressed: () => _playFirstAvailableEpisode(tv),
+                    ),
+                  _watchlistButton(),
+                ],
+      ),
+      sections: [
+        if (tv != null) ...[
+          _EpisodesSection(
+            key: const ValueKey('episodes'),
+            store: _tvStore,
+            tv: tv,
+            resume: resume,
+            pendingSeason: _pendingSeason,
+            onSeasonFocused: (n) => _selectSeason(tv, n),
+            onSeasonPressed: (n) => _selectSeason(tv, n, immediate: true),
+            onPlay:
+                (e) => _playEpisode(
+                  tv,
+                  e.seasonNumber,
+                  e.episodeNumber,
+                  seekTo: _resumePointFor(e),
+                ),
+          ),
+          ..._commonSections(
+            cast: cast,
+            genres: [for (final g in tv.genres) (id: g.id, name: g.name)],
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// Resume an episode from where it was left only if it is the one the
+  /// history entry points at.
+  int _resumePointFor(Episode e) {
+    final r = _resume;
+    if (r == null || r.completed) return 0;
+    if (r.seasonNumber == e.seasonNumber &&
+        r.episodeNumber == e.episodeNumber) {
+      return r.progressSeconds;
+    }
+    return 0;
+  }
+
+  Widget _watchlistButton() => TvButton(
+    label: 'My List',
+    icon: _inWatchlist ? Icons.check_rounded : Icons.add_rounded,
+    onPressed: _toggleWatchlist,
+  );
+
+  List<Widget> _commonSections({
+    required List<_CastEntry> cast,
+    required List<({int id, String name})> genres,
+  }) {
+    return [
+      if (_similar.isNotEmpty)
+        TvRailSection(
+          key: const ValueKey('similar'),
+          title: 'More Like This',
+          child: TvPosterRail(
+            count: _similar.length,
+            cardBuilder: (context, i) {
+              final r = _similar[i];
+              return TvPosterCard(
+                posterPath: r.posterPath,
+                title: r.title ?? r.name,
+                onPressed: () => _openTitle(r),
+              );
+            },
           ),
         ),
-      );
+      if (cast.isNotEmpty)
+        TvRailSection(
+          key: const ValueKey('cast'),
+          title: 'Cast',
+          child: TvRail(
+            itemCount: cast.length,
+            itemExtent: 96.s(context),
+            height: 142.s(context),
+            itemBuilder:
+                (context, i) => _CastTile(
+                  actor: cast[i],
+                  onPressed: () => _openPerson(cast[i]),
+                ),
+          ),
+        ),
+      if (genres.isNotEmpty)
+        TvSection(
+          key: const ValueKey('genres'),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const TvSectionTitle(title: 'Genres'),
+              Padding(
+                padding: EdgeInsets.fromLTRB(
+                  kTvGutter.s(context),
+                  10.s(context),
+                  kTvGutter.s(context),
+                  10.s(context),
+                ),
+                child: TvRowFocusGroup(
+                  child: Wrap(
+                    spacing: 8.s(context),
+                    runSpacing: 8.s(context),
+                    children: [
+                      for (final g in genres)
+                        TvChip(
+                          label: g.name,
+                          onPressed: () => _openGenre(g.id, g.name),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+    ];
+  }
 
-  Widget _buildCast(BuildContext context, List cast) {
-    return SizedBox(
-      height: 220.s(context),
-      child: ListView.builder(
-        padding: EdgeInsets.symmetric(horizontal: 50.s(context)),
-        scrollDirection: Axis.horizontal,
-        itemCount: cast.length,
-        itemBuilder: (ctx, i) => _CastCardDyn(actor: cast[i]),
-      ),
+  Widget _buildPage({
+    required String? backdropPath,
+    required Widget hero,
+    required List<Widget> sections,
+  }) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        TvBillboardBackdrop(path: backdropPath),
+        // Dim the artwork as the page scrolls down into its rails.
+        AnimatedBuilder(
+          animation: _scroll,
+          builder: (context, _) {
+            final offset = _scroll.hasClients ? _scroll.offset : 0.0;
+            final alpha = (offset / 260.s(context)).clamp(0.0, 0.86);
+            if (alpha == 0) return const SizedBox.shrink();
+            return ColoredBox(color: kDeepBlack.withValues(alpha: alpha));
+          },
+        ),
+        ListView(
+          controller: _scroll,
+          padding: EdgeInsets.only(bottom: 90.s(context)),
+          children: [
+            TvSection(key: const ValueKey('hero'), alignment: 0, child: hero),
+            // Keyed by section: "More Like This" can arrive after the user
+            // has already moved down the page, and must not shift (and so
+            // rebuild) the section that currently holds focus.
+            for (final section in sections)
+              Padding(
+                key: section.key,
+                padding: EdgeInsets.only(top: 6.s(context)),
+                child: section,
+              ),
+          ],
+        ),
+      ],
     );
   }
 
-  Widget _buildCastTv(BuildContext context, List<CastMember> cast) {
-    return SizedBox(
-      height: 220.s(context),
-      child: ListView.builder(
-        padding: EdgeInsets.symmetric(horizontal: 50.s(context)),
-        scrollDirection: Axis.horizontal,
-        itemCount: cast.length,
-        itemBuilder: (ctx, i) => _CastCard(actor: cast[i]),
-      ),
+  Widget _buildError() {
+    return TvMessage(
+      icon: Icons.cloud_off_rounded,
+      title: "Couldn't load this title",
+      detail: 'The source may be busy — try again.',
+      actions: [
+        TvButton(
+          label: 'Retry',
+          icon: Icons.refresh_rounded,
+          autofocus: true,
+          onPressed: _loadDetails,
+        ),
+        TvButton(
+          label: 'Go Back',
+          icon: Icons.arrow_back_rounded,
+          onPressed: () => Navigator.pop(context),
+        ),
+      ],
     );
+  }
+
+  static String? _year(String? date) =>
+      (date != null && date.length >= 4) ? date.substring(0, 4) : null;
+
+  static String _formatRuntime(int minutes) {
+    final h = minutes ~/ 60;
+    final m = minutes % 60;
+    if (h == 0) return '${m}m';
+    return m == 0 ? '${h}h' : '${h}h ${m}m';
+  }
+
+  static String _formatProgress(int seconds) {
+    final h = seconds ~/ 3600;
+    final m = (seconds % 3600) ~/ 60;
+    return h > 0 ? '${h}h ${m}m in' : '${m}m in';
   }
 }
 
 // ============== HERO ==============
-class _HeroHeader extends StatelessWidget {
-  final String? backdropPath;
+
+class _DetailHero extends StatelessWidget {
+  const _DetailHero({
+    required this.kind,
+    required this.title,
+    required this.meta,
+    required this.credits,
+    required this.actions,
+    this.tagline,
+    this.overview,
+    this.rating,
+  });
+
+  final String kind;
   final String title;
   final String? tagline;
-  final String? year;
-  final String? runtime;
   final String? overview;
-  final double? voteAverage;
-  final Widget actions;
+  final double? rating;
+  final List<String> meta;
 
-  const _HeroHeader({
-    this.backdropPath,
-    required this.title,
-    this.tagline,
-    this.year,
-    this.runtime,
-    this.overview,
-    this.voteAverage,
-    required this.actions,
-  });
+  /// (label, value) pairs such as ('Starring', 'A, B, C').
+  final List<(String, String)> credits;
+
+  /// Null while the full details are still loading.
+  final List<Widget>? actions;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      constraints: BoxConstraints(
-        minHeight: MediaQuery.of(context).size.height * 0.78,
-      ),
-      child: Stack(
-        children: [
-          Positioned.fill(
-            child: ShaderMask(
-              shaderCallback: (rect) {
-                return LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.black.withOpacity(0.0),
-                    Colors.black.withOpacity(0.3),
-                    kDeepBlack,
-                  ],
-                  stops: const [0, 0.4, 0.9],
-                ).createShader(rect);
-              },
-              blendMode: BlendMode.dstIn,
-              child: backdropPath != null
-                  ? Image.network('$imgOriginal$backdropPath', fit: BoxFit.cover)
-                  : Container(color: kSurfaceGrey),
-            ),
-          ),
-          Positioned.fill(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.centerLeft,
-                  end: Alignment.centerRight,
-                  colors: [
-                    kDeepBlack.withOpacity(0.85),
-                    kDeepBlack.withOpacity(0.35),
-                    Colors.transparent,
-                  ],
-                  stops: const [0, 0.5, 1.0],
-                ),
-              ),
-            ),
-          ),
-          Padding(
-            padding: EdgeInsets.fromLTRB(
-              60.s(context),
-              80.s(context),
-              60.s(context),
-              40.s(context),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    color: kTextWhite,
-                    fontSize: 56.s(context),
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: -1.s(context),
-                    height: 1.0,
-                    shadows: [
-                      Shadow(
-                        color: Colors.black.withOpacity(0.7),
-                        blurRadius: 14.s(context),
-                      ),
-                    ],
+    final size = MediaQuery.sizeOf(context);
+    final shadow = [
+      Shadow(color: Colors.black.withValues(alpha: 0.6), blurRadius: 12),
+    ];
+    final tagline = this.tagline;
+    final overview = this.overview;
+    final actions = this.actions;
+
+    return ConstrainedBox(
+      constraints: BoxConstraints(minHeight: size.height * 0.76),
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+          kTvGutter.s(context),
+          64.s(context),
+          kTvGutter.s(context),
+          18.s(context),
+        ),
+        child: SizedBox(
+          width: size.width * 0.48,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 3.s(context),
+                    height: 12.s(context),
+                    color: kNetflixRed,
                   ),
-                ),
-                SizedBox(height: 12.s(context)),
-                Row(
-                  children: [
-                    if (year != null)
-                      Text(year!, style: TextStyle(color: kTextGrey, fontSize: 16.s(context))),
-                    if (year != null) SizedBox(width: 14.s(context)),
-                    if (runtime != null)
-                      Text(runtime!,
-                          style: TextStyle(color: kTextGrey, fontSize: 16.s(context))),
-                    if (runtime != null) SizedBox(width: 14.s(context)),
-                    if (voteAverage != null && voteAverage! > 0)
-                      Container(
-                        padding: EdgeInsets.symmetric(
-                          horizontal: 8.s(context),
-                          vertical: 2.s(context),
-                        ),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFFACC15),
-                          borderRadius: BorderRadius.circular(4.s(context)),
-                        ),
-                        child: Text(
-                          '★ ${voteAverage!.toStringAsFixed(1)}',
-                          style: TextStyle(
-                            color: kDeepBlack,
-                            fontSize: 12.s(context),
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                      ),
-                    SizedBox(width: 14.s(context)),
-                    Container(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: 6.s(context),
-                        vertical: 1.s(context),
-                      ),
-                      decoration: BoxDecoration(
-                        border: Border.all(color: kTextGrey.withOpacity(0.5)),
-                        borderRadius: BorderRadius.circular(4.s(context)),
-                      ),
-                      child: Text(
-                        'HD',
-                        style: TextStyle(
-                          color: kTextWhite.withOpacity(0.8),
-                          fontSize: 11.s(context),
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                if (tagline != null && tagline!.isNotEmpty) ...[
-                  SizedBox(height: 18.s(context)),
+                  SizedBox(width: 8.s(context)),
                   Text(
-                    tagline!,
+                    kind,
                     style: TextStyle(
-                      color: kTextWhite.withOpacity(0.85),
-                      fontSize: 20.s(context),
-                      fontStyle: FontStyle.italic,
-                      fontWeight: FontWeight.w300,
+                      color: Colors.white.withValues(alpha: 0.75),
+                      fontSize: 10.5.s(context),
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 3.s(context),
                     ),
                   ),
                 ],
-                SizedBox(height: 18.s(context)),
-                if (overview != null)
-                  SizedBox(
-                    width: MediaQuery.of(context).size.width * 0.48,
-                    child: Text(
-                      overview!,
-                      maxLines: 6,
+              ),
+              SizedBox(height: 10.s(context)),
+              Text(
+                title,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: kTextWhite,
+                  fontSize: 40.s(context),
+                  fontWeight: FontWeight.w900,
+                  height: 1.08,
+                  letterSpacing: -0.5.s(context),
+                  shadows: shadow,
+                ),
+              ),
+              SizedBox(height: 10.s(context)),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TvMetaLine(rating: rating, items: meta),
+                  SizedBox(width: 10.s(context)),
+                  const _QualityTag(label: 'HD'),
+                ],
+              ),
+              if (tagline != null && tagline.isNotEmpty) ...[
+                SizedBox(height: 12.s(context)),
+                Text(
+                  tagline,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.9),
+                    fontSize: 14.s(context),
+                    fontStyle: FontStyle.italic,
+                    shadows: shadow,
+                  ),
+                ),
+              ],
+              if (overview != null && overview.isNotEmpty) ...[
+                SizedBox(height: 10.s(context)),
+                Text(
+                  overview,
+                  maxLines: 4,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.86),
+                    fontSize: 13.s(context),
+                    height: 1.45,
+                    shadows: shadow,
+                  ),
+                ),
+              ],
+              SizedBox(height: 18.s(context)),
+              if (actions == null)
+                TvPulse(
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TvSkeletonBox(
+                        width: 96.s(context),
+                        height: 36.s(context),
+                      ),
+                      SizedBox(width: 10.s(context)),
+                      TvSkeletonBox(
+                        width: 110.s(context),
+                        height: 36.s(context),
+                      ),
+                    ],
+                  ),
+                )
+              else
+                TvRowFocusGroup(
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      for (var i = 0; i < actions.length; i++) ...[
+                        if (i > 0) SizedBox(width: 10.s(context)),
+                        actions[i],
+                      ],
+                    ],
+                  ),
+                ),
+              if (credits.isNotEmpty) ...[
+                SizedBox(height: 16.s(context)),
+                for (final (label, value) in credits)
+                  Padding(
+                    padding: EdgeInsets.only(bottom: 3.s(context)),
+                    child: Text.rich(
+                      TextSpan(
+                        children: [
+                          TextSpan(
+                            text: '$label:  ',
+                            style: const TextStyle(color: kTextGrey),
+                          ),
+                          TextSpan(text: value),
+                        ],
+                      ),
+                      maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        color: kTextWhite.withOpacity(0.9),
-                        fontSize: 16.s(context),
-                        height: 1.55,
+                        color: Colors.white.withValues(alpha: 0.9),
+                        fontSize: 11.5.s(context),
                       ),
                     ),
                   ),
-                SizedBox(height: 32.s(context)),
-                actions,
               ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ============== ACTION BUTTON ==============
-class _ActionButton extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final bool isPrimary;
-  final bool autofocus;
-  final String? subLabel;
-  final VoidCallback onPressed;
-
-  const _ActionButton({
-    required this.label,
-    required this.icon,
-    required this.isPrimary,
-    this.autofocus = false,
-    this.subLabel,
-    required this.onPressed,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Focus(
-      autofocus: autofocus,
-      onKeyEvent: (n, e) {
-        if (e is KeyDownEvent &&
-            (e.logicalKey == LogicalKeyboardKey.select ||
-                e.logicalKey == LogicalKeyboardKey.enter ||
-                e.logicalKey == LogicalKeyboardKey.space)) {
-          onPressed();
-          return KeyEventResult.handled;
-        }
-        return KeyEventResult.ignored;
-      },
-      child: Builder(builder: (ctx) {
-        final focused = Focus.of(ctx).hasFocus;
-        return GestureDetector(
-          onTap: onPressed,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 120),
-            padding: EdgeInsets.symmetric(
-              horizontal: 26.s(context),
-              vertical: 12.s(context),
-            ),
-            decoration: BoxDecoration(
-              color: isPrimary
-                  ? (focused ? Colors.white : Colors.white.withOpacity(0.92))
-                  : (focused ? Colors.white24 : Colors.white.withOpacity(0.12)),
-              borderRadius: BorderRadius.circular(4.s(context)),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  icon,
-                  color: isPrimary ? Colors.black : Colors.white,
-                  size: 24.s(context),
-                ),
-                SizedBox(width: 8.s(context)),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      label,
-                      style: TextStyle(
-                        color: isPrimary ? Colors.black : Colors.white,
-                        fontSize: 16.s(context),
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    if (subLabel != null)
-                      Text(
-                        subLabel!,
-                        style: TextStyle(
-                          color: isPrimary ? Colors.black54 : Colors.white60,
-                          fontSize: 10.s(context),
-                        ),
-                      ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        );
-      }),
-    );
-  }
-}
-
-// ============== EPISODE PICKER ==============
-class _EpisodePicker extends StatelessWidget {
-  final TvDetailStore store;
-  final TvDetail tv;
-  final void Function(TvDetail tv, int season, int episode, {int seekTo}) onPlay;
-
-  const _EpisodePicker({required this.store, required this.tv, required this.onPlay});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.symmetric(horizontal: 60.s(context)),
-      child: SizedBox(
-        height: 320.s(context),
-        child: FocusTraversalGroup(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SizedBox(
-                width: 200.s(context),
-                child: Observer(builder: (_) {
-                  return ListView.builder(
-                    itemCount: tv.seasons.length,
-                    itemBuilder: (ctx, i) {
-                      final s = tv.seasons[i];
-                      final sel = store.selectedSeasonNumber == s.seasonNumber;
-                      return _SeasonRow(
-                        label: s.name ?? 'Season ${s.seasonNumber}',
-                        episodes: s.episodeCount,
-                        selected: sel,
-                        onFocus: () => store.fetchSeason(tv.id, s.seasonNumber),
-                      );
-                    },
-                  );
-                }),
-              ),
-              SizedBox(width: 16.s(context)),
-              Expanded(
-                child: Observer(builder: (_) {
-                  if (store.isSeasonLoading || store.selectedSeason == null) {
-                    return const Center(
-                      child: CircularProgressIndicator(color: kNetflixRed),
-                    );
-                  }
-                  // Drop episodes that haven't aired yet — TMDB lists future
-                  // episodes in the season payload but they obviously can't
-                  // be played.
-                  final now = DateTime.now();
-                  final eps = store.selectedSeason!.episodes.where((ep) {
-                    final d = ep.airDate;
-                    if (d == null || d.isEmpty) return false;
-                    final parsed = DateTime.tryParse(d);
-                    if (parsed == null) return false;
-                    return !parsed.isAfter(now);
-                  }).toList();
-                  if (eps.isEmpty) {
-                    return Center(
-                      child: Text(
-                        'No episodes have aired yet',
-                        style: TextStyle(
-                            color: kTextGrey, fontSize: 14.s(context)),
-                      ),
-                    );
-                  }
-                  return ListView.separated(
-                    scrollDirection: Axis.horizontal,
-                    itemCount: eps.length,
-                    separatorBuilder: (_, __) => SizedBox(width: 16.s(context)),
-                    itemBuilder: (ctx, i) {
-                      final e = eps[i];
-                      return _EpisodeCard(
-                        episode: e,
-                        onPlay: () => onPlay(tv, e.seasonNumber, e.episodeNumber),
-                      );
-                    },
-                  );
-                }),
-              ),
             ],
           ),
         ),
@@ -740,450 +816,411 @@ class _EpisodePicker extends StatelessWidget {
   }
 }
 
-class _SeasonRow extends StatelessWidget {
+class _QualityTag extends StatelessWidget {
+  const _QualityTag({required this.label});
   final String label;
-  final int? episodes;
-  final bool selected;
-  final VoidCallback onFocus;
-  const _SeasonRow({
-    required this.label,
-    this.episodes,
-    required this.selected,
-    required this.onFocus,
-  });
 
   @override
   Widget build(BuildContext context) {
-    return Focus(
-      onFocusChange: (f) {
-        if (f) onFocus();
-      },
-      child: Builder(builder: (ctx) {
-        final focused = Focus.of(ctx).hasFocus;
-        return Container(
-          margin: EdgeInsets.symmetric(vertical: 4.s(context)),
-          padding: EdgeInsets.symmetric(
-            horizontal: 14.s(context),
-            vertical: 12.s(context),
-          ),
-          decoration: BoxDecoration(
-            color: focused ? kNetflixRed : (selected ? kSurfaceHi : Colors.transparent),
-            borderRadius: BorderRadius.circular(8.s(context)),
-          ),
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: 5.s(context),
+        vertical: 1.s(context),
+      ),
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.white.withValues(alpha: 0.5)),
+        borderRadius: BorderRadius.circular(3.s(context)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: Colors.white.withValues(alpha: 0.85),
+          fontSize: 9.5.s(context),
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+}
+
+// ============== EPISODES ==============
+
+const double _episodeWidth = 196;
+const double _episodeGap = 14;
+
+class _EpisodesSection extends StatelessWidget {
+  const _EpisodesSection({
+    super.key,
+    required this.store,
+    required this.tv,
+    required this.resume,
+    required this.pendingSeason,
+    required this.onSeasonFocused,
+    required this.onSeasonPressed,
+    required this.onPlay,
+  });
+
+  final TvDetailStore store;
+  final TvDetail tv;
+  final HistoryItem? resume;
+  final int? pendingSeason;
+  final ValueChanged<int> onSeasonFocused;
+  final ValueChanged<int> onSeasonPressed;
+  final ValueChanged<Episode> onPlay;
+
+  static double _railHeight(BuildContext context) => 212.s(context);
+
+  @override
+  Widget build(BuildContext context) {
+    return Observer(
+      builder: (_) {
+        final selected = pendingSeason ?? store.selectedSeasonNumber;
+        final single = tv.seasons.length == 1;
+        return TvSection(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Text(
-                label,
-                style: TextStyle(
-                  color: kTextWhite,
-                  fontSize: 14.s(context),
-                  fontWeight: FontWeight.w700,
-                ),
-                overflow: TextOverflow.ellipsis,
+              TvSectionTitle(
+                title: 'Episodes',
+                trailing:
+                    single
+                        ? (tv.seasons.first.name ??
+                            'Season ${tv.seasons.first.seasonNumber}')
+                        : null,
               ),
-              if (episodes != null)
-                Text('$episodes episodes',
-                    style: TextStyle(color: Colors.white60, fontSize: 11.s(context))),
+              if (tv.seasons.length > 1)
+                TvFlowRail(
+                  height: 48.s(context),
+                  children: [
+                    for (final s in tv.seasons)
+                      TvChip(
+                        label: s.name ?? 'Season ${s.seasonNumber}',
+                        selected: s.seasonNumber == selected,
+                        onFocusChange: (f) {
+                          if (f) onSeasonFocused(s.seasonNumber);
+                        },
+                        onPressed: () => onSeasonPressed(s.seasonNumber),
+                      ),
+                  ],
+                ),
+              _buildEpisodes(context),
             ],
           ),
         );
-      }),
+      },
+    );
+  }
+
+  Widget _buildEpisodes(BuildContext context) {
+    final height = _railHeight(context);
+    final season = store.selectedSeason;
+    if (season == null) {
+      if (!store.isSeasonLoading && !store.isLoading) {
+        return _note(context, height, "Couldn't load episodes");
+      }
+      return SizedBox(height: height, child: const _EpisodesSkeleton());
+    }
+
+    // Drop episodes that haven't aired yet — TMDB lists future episodes in
+    // the season payload but they obviously can't be played.
+    final now = DateTime.now();
+    final episodes =
+        season.episodes.where((ep) {
+          final aired = DateTime.tryParse(ep.airDate ?? '');
+          return aired != null && !aired.isAfter(now);
+        }).toList();
+
+    // Still showing the previous season while the newly picked one loads.
+    final stale =
+        store.isSeasonLoading ||
+        pendingSeason != null && pendingSeason != season.seasonNumber;
+
+    if (episodes.isEmpty) {
+      return _note(context, height, 'No episodes have aired yet');
+    }
+    final r = resume;
+    return AnimatedOpacity(
+      opacity: stale ? 0.35 : 1,
+      duration: TvMotion.focus,
+      child: TvFadeIn(
+        key: ValueKey(season.seasonNumber),
+        child: TvRail(
+          storageId: 'episodes-${tv.id}-${season.seasonNumber}',
+          itemCount: episodes.length,
+          itemExtent: (_episodeWidth + _episodeGap).s(context),
+          height: height,
+          itemBuilder: (context, i) {
+            final e = episodes[i];
+            final inProgress =
+                r != null &&
+                !r.completed &&
+                r.seasonNumber == e.seasonNumber &&
+                r.episodeNumber == e.episodeNumber;
+            return _EpisodeCard(
+              episode: e,
+              progress: inProgress ? r.progressFraction : null,
+              onPressed: () => onPlay(e),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _note(BuildContext context, double height, String text) {
+    return SizedBox(
+      height: height,
+      child: Padding(
+        padding: EdgeInsets.only(
+          left: kTvGutter.s(context),
+          top: 20.s(context),
+        ),
+        child: Text(
+          text,
+          style: TextStyle(color: kTextGrey, fontSize: 13.s(context)),
+        ),
+      ),
     );
   }
 }
 
 class _EpisodeCard extends StatelessWidget {
+  const _EpisodeCard({
+    required this.episode,
+    required this.onPressed,
+    this.progress,
+  });
+
   final Episode episode;
-  final VoidCallback onPlay;
-  const _EpisodeCard({required this.episode, required this.onPlay});
+  final VoidCallback onPressed;
+  final double? progress;
 
   @override
   Widget build(BuildContext context) {
-    return Focus(
-      onKeyEvent: (n, e) {
-        if (e is KeyDownEvent &&
-            (e.logicalKey == LogicalKeyboardKey.select ||
-                e.logicalKey == LogicalKeyboardKey.enter ||
-                e.logicalKey == LogicalKeyboardKey.space)) {
-          onPlay();
-          return KeyEventResult.handled;
-        }
-        return KeyEventResult.ignored;
-      },
-      child: Builder(builder: (ctx) {
-        final focused = Focus.of(ctx).hasFocus;
-        return GestureDetector(
-          onTap: onPlay,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 150),
-            width: 260.s(context),
-            transform: focused ? (Matrix4.identity()..scale(1.04)) : Matrix4.identity(),
-            decoration: BoxDecoration(
-              color: kSurfaceGrey,
-              borderRadius: BorderRadius.circular(10.s(context)),
-              border: Border.all(
-                color: focused ? kTextWhite : Colors.transparent,
-                width: 3.s(context),
-              ),
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(8.s(context)),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  AspectRatio(
-                    aspectRatio: 16 / 9,
-                    child: episode.stillPath != null
-                        ? Image.network('$imgW300${episode.stillPath}', fit: BoxFit.cover)
-                        : Container(
-                            color: kSurfaceHi,
-                            alignment: Alignment.center,
-                            child: Icon(Icons.tv, color: Colors.white24, size: 48.s(context)),
-                          ),
-                  ),
-                  Padding(
-                    padding: EdgeInsets.all(10.s(context)),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'E${episode.episodeNumber} · ${episode.name ?? "Episode ${episode.episodeNumber}"}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: kTextWhite,
-                            fontSize: 13.s(context),
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        if (episode.runtime != null)
-                          Text('${episode.runtime}m',
-                              style: TextStyle(color: kTextGrey, fontSize: 11.s(context))),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      }),
-    );
-  }
-}
-
-// ============== GENRE CHIPS ==============
-class _GenreChip extends StatefulWidget {
-  final String label;
-  final VoidCallback onTap;
-  const _GenreChip({required this.label, required this.onTap});
-
-  @override
-  State<_GenreChip> createState() => _GenreChipState();
-}
-
-class _GenreChipState extends State<_GenreChip> {
-  bool _focused = false;
-
-  @override
-  Widget build(BuildContext context) {
-    return Focus(
-      onFocusChange: (f) => setState(() => _focused = f),
-      onKeyEvent: (n, e) {
-        if (e is KeyDownEvent &&
-            (e.logicalKey == LogicalKeyboardKey.select ||
-                e.logicalKey == LogicalKeyboardKey.enter ||
-                e.logicalKey == LogicalKeyboardKey.space)) {
-          widget.onTap();
-          return KeyEventResult.handled;
-        }
-        return KeyEventResult.ignored;
-      },
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 160),
-          curve: Curves.easeOut,
-          padding: EdgeInsets.symmetric(
-            horizontal: 16.s(context),
-            vertical: 10.s(context),
-          ),
-          decoration: BoxDecoration(
-            color: _focused ? kNetflixRed : Colors.white12,
-            borderRadius: BorderRadius.circular(100),
-            border: Border.all(
-              color: _focused ? kNetflixRed : Colors.white24,
-              width: 1.5,
-            ),
-          ),
-          child: Text(
-            widget.label,
-            style: TextStyle(
-              color: kTextWhite,
-              fontSize: 13.s(context),
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ============== CAST CARDS ==============
-class _CastCard extends StatefulWidget {
-  final CastMember actor;
-  const _CastCard({required this.actor});
-
-  @override
-  State<_CastCard> createState() => _CastCardState();
-}
-
-class _CastCardState extends State<_CastCard> {
-  bool _focused = false;
-  void _open() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => PersonFilmographyPage(
-          personId: widget.actor.id,
-          personName: widget.actor.name,
-        ),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final actor = widget.actor;
-    return Padding(
-      padding: EdgeInsets.symmetric(horizontal: 8.s(context)),
-      child: Focus(
-        onFocusChange: (f) => setState(() => _focused = f),
-        onKeyEvent: (n, e) {
-          if (e is KeyDownEvent &&
-              (e.logicalKey == LogicalKeyboardKey.select ||
-                  e.logicalKey == LogicalKeyboardKey.enter ||
-                  e.logicalKey == LogicalKeyboardKey.space)) {
-            _open();
-            return KeyEventResult.handled;
-          }
-          return KeyEventResult.ignored;
-        },
-        child: GestureDetector(
-          onTap: _open,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 180),
-            curve: Curves.easeOut,
-            width: 120.s(context),
-            transform: _focused
-                ? (Matrix4.identity()..scale(1.08))
-                : Matrix4.identity(),
-            transformAlignment: Alignment.center,
-            child: Column(
-              children: [
-                Container(
-                  height: 140.s(context),
-                  width: 120.s(context),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(10.s(context)),
-                    color: kSurfaceGrey,
-                    border: Border.all(
-                      color: _focused ? kNetflixRed : Colors.transparent,
-                      width: 2,
-                    ),
-                    image: actor.profilePath != null
-                        ? DecorationImage(
-                            image: NetworkImage('$imgW200${actor.profilePath}'),
-                            fit: BoxFit.cover,
-                          )
-                        : null,
-                  ),
-                  child: actor.profilePath == null
-                      ? Icon(Icons.person,
-                          color: Colors.white24, size: 48.s(context))
-                      : null,
-                ),
-                SizedBox(height: 8.s(context)),
-                Text(
-                  actor.name,
-                  style: TextStyle(color: kTextWhite, fontSize: 13.s(context)),
-                  textAlign: TextAlign.center,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                if (actor.character != null)
-                  Text(
-                    actor.character!,
-                    style: TextStyle(
-                        color: kTextGrey, fontSize: 11.s(context)),
-                    textAlign: TextAlign.center,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _CastCardDyn extends StatefulWidget {
-  final dynamic actor;
-  const _CastCardDyn({required this.actor});
-
-  @override
-  State<_CastCardDyn> createState() => _CastCardDynState();
-}
-
-class _CastCardDynState extends State<_CastCardDyn> {
-  bool _focused = false;
-  void _open() {
-    final id = widget.actor.id as int?;
-    if (id == null) return;
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => PersonFilmographyPage(
-          personId: id,
-          personName: (widget.actor.name as String?) ?? 'Actor',
-        ),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final actor = widget.actor;
-    return Padding(
-      padding: EdgeInsets.symmetric(horizontal: 8.s(context)),
-      child: Focus(
-        onFocusChange: (f) => setState(() => _focused = f),
-        onKeyEvent: (n, e) {
-          if (e is KeyDownEvent &&
-              (e.logicalKey == LogicalKeyboardKey.select ||
-                  e.logicalKey == LogicalKeyboardKey.enter ||
-                  e.logicalKey == LogicalKeyboardKey.space)) {
-            _open();
-            return KeyEventResult.handled;
-          }
-          return KeyEventResult.ignored;
-        },
-        child: GestureDetector(
-          onTap: _open,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 180),
-            curve: Curves.easeOut,
-            width: 120.s(context),
-            transform: _focused
-                ? (Matrix4.identity()..scale(1.08))
-                : Matrix4.identity(),
-            transformAlignment: Alignment.center,
-            child: Column(
-              children: [
-                Container(
-                  height: 140.s(context),
-                  width: 120.s(context),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(10.s(context)),
-                    color: kSurfaceGrey,
-                    border: Border.all(
-                      color: _focused ? kNetflixRed : Colors.transparent,
-                      width: 2,
-                    ),
-                    image: actor.profilePath != null
-                        ? DecorationImage(
-                            image:
-                                NetworkImage('$imgW200${actor.profilePath}'),
-                            fit: BoxFit.cover,
-                          )
-                        : null,
-                  ),
-                  child: actor.profilePath == null
-                      ? Icon(Icons.person,
-                          color: Colors.white24, size: 48.s(context))
-                      : null,
-                ),
-                SizedBox(height: 8.s(context)),
-                Text(
-                  actor.name ?? '',
-                  style: TextStyle(color: kTextWhite, fontSize: 13.s(context)),
-                  textAlign: TextAlign.center,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                if (actor.character != null)
-                  Text(
-                    actor.character ?? '',
-                    style: TextStyle(
-                        color: kTextGrey, fontSize: 11.s(context)),
-                    textAlign: TextAlign.center,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ============== ERROR ==============
-class _ErrorState extends StatelessWidget {
-  final VoidCallback onBack;
-  final VoidCallback? onRetry;
-  const _ErrorState({required this.onBack, this.onRetry});
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.cloud_off_rounded, color: kTextGrey, size: 40.s(context)),
-          SizedBox(height: 14.s(context)),
-          Text(
-            "Couldn't load this title",
-            style: TextStyle(
-              color: kTextWhite,
-              fontSize: 18.s(context),
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          SizedBox(height: 6.s(context)),
-          Text(
-            'The source may be busy — try again.',
-            style: TextStyle(color: kTextGrey, fontSize: 13.s(context)),
-          ),
-          SizedBox(height: 22.s(context)),
-          Row(
+    final width = _episodeWidth.s(context);
+    final runtime = episode.runtime;
+    final overview = episode.overview;
+    return TvFocusable(
+      onPressed: onPressed,
+      builder: (context, focused) {
+        return SizedBox(
+          width: width,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (onRetry != null) ...[
-                _ActionButton(
-                  label: 'Retry',
-                  icon: Icons.refresh,
-                  isPrimary: true,
-                  autofocus: true,
-                  onPressed: onRetry!,
+              TvFocusFrame(
+                focused: focused,
+                radius: 5.s(context),
+                ringWidth: 2.5.s(context),
+                scale: 1.05,
+                child: SizedBox(
+                  width: width,
+                  height: width * 9 / 16,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      TvImage(
+                        path: episode.stillPath,
+                        kind: TmdbImageKind.still,
+                        width: width,
+                        fallback: Container(
+                          color: kSurfaceHi,
+                          alignment: Alignment.center,
+                          child: Icon(
+                            Icons.tv_rounded,
+                            color: Colors.white24,
+                            size: 34.s(context),
+                          ),
+                        ),
+                      ),
+                      if (focused)
+                        Center(
+                          child: Container(
+                            width: 34.s(context),
+                            height: 34.s(context),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.55),
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: Colors.white,
+                                width: 1.5,
+                              ),
+                            ),
+                            child: Icon(
+                              Icons.play_arrow_rounded,
+                              color: Colors.white,
+                              size: 22.s(context),
+                            ),
+                          ),
+                        ),
+                      if (progress != null && progress! > 0)
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          child: TvProgressBar(value: progress!),
+                        ),
+                    ],
+                  ),
                 ),
-                SizedBox(width: 14.s(context)),
-              ],
-              _ActionButton(
-                label: 'Go Back',
-                icon: Icons.arrow_back,
-                isPrimary: false,
-                autofocus: onRetry == null,
-                onPressed: onBack,
               ),
+              SizedBox(height: 10.s(context)),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${episode.episodeNumber}. '
+                      '${episode.name ?? 'Episode ${episode.episodeNumber}'}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color:
+                            focused
+                                ? kTextWhite
+                                : Colors.white.withValues(alpha: 0.82),
+                        fontSize: 12.5.s(context),
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  if (runtime != null && runtime > 0) ...[
+                    SizedBox(width: 6.s(context)),
+                    Text(
+                      '${runtime}m',
+                      style: TextStyle(
+                        color: kTextGrey,
+                        fontSize: 11.s(context),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              if (overview != null && overview.isNotEmpty) ...[
+                SizedBox(height: 3.s(context)),
+                Text(
+                  overview,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: kTextGrey.withValues(alpha: focused ? 1 : 0.75),
+                    fontSize: 10.5.s(context),
+                    height: 1.35,
+                  ),
+                ),
+              ],
             ],
           ),
-        ],
+        );
+      },
+    );
+  }
+}
+
+class _EpisodesSkeleton extends StatelessWidget {
+  const _EpisodesSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    final width = _episodeWidth.s(context);
+    return TvPulse(
+      child: OverflowBox(
+        alignment: Alignment.topLeft,
+        maxWidth: double.infinity,
+        child: Padding(
+          padding: EdgeInsets.only(
+            left: kTvGutter.s(context),
+            top: 12.s(context),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (var i = 0; i < 5; i++)
+                Padding(
+                  padding: EdgeInsets.only(right: _episodeGap.s(context)),
+                  child: TvSkeletonBox(width: width, height: width * 9 / 16),
+                ),
+            ],
+          ),
+        ),
       ),
+    );
+  }
+}
+
+// ============== CAST ==============
+
+class _CastTile extends StatelessWidget {
+  const _CastTile({required this.actor, required this.onPressed});
+
+  final _CastEntry actor;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final size = 74.s(context);
+    final character = actor.character;
+    return TvFocusable(
+      onPressed: onPressed,
+      builder: (context, focused) {
+        return SizedBox(
+          width: 84.s(context),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TvFocusFrame(
+                focused: focused,
+                circle: true,
+                ringWidth: 2.5.s(context),
+                child: SizedBox(
+                  width: size,
+                  height: size,
+                  child: TvImage(
+                    path: actor.profilePath,
+                    kind: TmdbImageKind.profile,
+                    width: size,
+                    alignment: Alignment.topCenter,
+                    fallback: Container(
+                      color: kSurfaceHi,
+                      alignment: Alignment.center,
+                      child: Icon(
+                        Icons.person_rounded,
+                        color: Colors.white24,
+                        size: 36.s(context),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              SizedBox(height: 10.s(context)),
+              Text(
+                actor.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color:
+                      focused
+                          ? kTextWhite
+                          : Colors.white.withValues(alpha: 0.85),
+                  fontSize: 11.5.s(context),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              if (character != null && character.isNotEmpty)
+                Text(
+                  character,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: kTextGrey, fontSize: 10.s(context)),
+                ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

@@ -104,7 +104,7 @@ class _LoginPageState extends State<LoginPage> {
                     center: const Alignment(-0.4, -0.2),
                     radius: 1.4,
                     colors: [
-                      kNetflixRed.withOpacity(0.18),
+                      kNetflixRed.withValues(alpha: 0.18),
                       kDeepBlack,
                     ],
                   ),
@@ -228,7 +228,7 @@ class _LoginPageState extends State<LoginPage> {
     return Container(
       padding: EdgeInsets.all(16.s(context)),
       decoration: BoxDecoration(
-        color: kSurfaceGrey.withOpacity(0.85),
+        color: kSurfaceGrey.withValues(alpha: 0.85),
         borderRadius: BorderRadius.circular(16.s(context)),
         border: Border.all(color: Colors.white12),
       ),
@@ -324,9 +324,21 @@ class _LoginPageState extends State<LoginPage> {
                 ),
               ),
               SizedBox(width: 6.s(context)),
-              _KeyTile(label: '@', onPressed: () => _append('@')),
+              Expanded(
+                child: _KeyTile(
+                  label: '@',
+                  wide: true,
+                  onPressed: () => _append('@'),
+                ),
+              ),
               SizedBox(width: 6.s(context)),
-              _KeyTile(label: '.', onPressed: () => _append('.')),
+              Expanded(
+                child: _KeyTile(
+                  label: '.',
+                  wide: true,
+                  onPressed: () => _append('.'),
+                ),
+              ),
             ],
           ),
         ],
@@ -369,7 +381,8 @@ class _Field extends StatelessWidget {
       },
       child: Builder(builder: (ctx) {
         final focused = Focus.of(ctx).hasFocus;
-        final ringColor = focused ? kAccent : (active ? kNetflixRed : Colors.white12);
+        final ringColor =
+            focused ? Colors.white : (active ? kNetflixRed : Colors.white12);
         return GestureDetector(
           onTap: onFocus,
           child: AnimatedContainer(
@@ -379,7 +392,7 @@ class _Field extends StatelessWidget {
               vertical: 14.s(context),
             ),
             decoration: BoxDecoration(
-              color: kSurfaceHi.withOpacity(focused || active ? 1.0 : 0.7),
+              color: kSurfaceHi.withValues(alpha: focused || active ? 1.0 : 0.7),
               borderRadius: BorderRadius.circular(10.s(context)),
               border: Border.all(color: ringColor, width: 2.s(context)),
             ),
@@ -465,16 +478,16 @@ class _KeyTile extends StatelessWidget {
                 : null,
             alignment: Alignment.center,
             decoration: BoxDecoration(
-              color: focused ? kNetflixRed : kSurfaceHi,
+              color: focused ? Colors.white : kSurfaceHi,
               borderRadius: BorderRadius.circular(8.s(context)),
-              border: focused
-                  ? null
-                  : Border.all(color: Colors.white10),
+              border: Border.all(
+                color: focused ? Colors.white : Colors.white10,
+              ),
             ),
             child: Text(
               label,
               style: TextStyle(
-                color: kTextWhite,
+                color: focused ? Colors.black : kTextWhite,
                 fontSize: (wide ? 12 : 16).s(context),
                 fontWeight: FontWeight.w700,
               ),
@@ -512,11 +525,14 @@ class _PrimaryButton extends StatelessWidget {
             duration: const Duration(milliseconds: 150),
             height: 56.s(context),
             decoration: BoxDecoration(
-              color: focused ? kNetflixRed : kNetflixRed.withOpacity(0.85),
+              color: focused
+                  ? kNetflixRed
+                  : kNetflixRed.withValues(alpha: 0.8),
               borderRadius: BorderRadius.circular(10.s(context)),
-              boxShadow: focused
-                  ? [BoxShadow(color: kNetflixRed.withOpacity(0.5), blurRadius: 24.s(context))]
-                  : [],
+              border: Border.all(
+                color: focused ? Colors.white : Colors.transparent,
+                width: 2.5.s(context),
+              ),
             ),
             alignment: Alignment.center,
             child: Text(
@@ -561,9 +577,11 @@ class _TextButton extends StatelessWidget {
             child: Text(
               label,
               style: TextStyle(
-                color: focused ? kAccent : kTextGrey,
+                color: focused ? Colors.white : kTextGrey,
                 fontSize: 14.s(context),
+                fontWeight: focused ? FontWeight.w700 : FontWeight.w400,
                 decoration: focused ? TextDecoration.underline : null,
+                decorationColor: Colors.white,
               ),
             ),
           ),

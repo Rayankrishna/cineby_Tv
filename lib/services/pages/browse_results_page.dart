@@ -3,11 +3,11 @@ import 'package:cineby_tv/services/config.dart';
 import 'package:cineby_tv/services/pages/details.dart';
 import 'package:cineby_tv/services/tmdb_client.dart';
 import 'package:cineby_tv/utils/tv_scale.dart';
+import 'package:cineby_tv/widgets/tv_widgets.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
-/// Browse all titles of one TMDB genre. Opened from genre chips on the
-/// details page.
+/// Browse all titles of one TMDB genre. Opened from genre chips on the home
+/// and details pages.
 class GenreResultsPage extends StatefulWidget {
   final int genreId;
   final String genreName;
@@ -61,13 +61,27 @@ class _GenreResultsPageState extends State<GenreResultsPage> {
     }
   }
 
+  void _retry() {
+    setState(() {
+      _error = null;
+      _initialLoad = true;
+    });
+    _loadNextPage();
+  }
+
   Future<void> _loadNextPage() async {
     if (_loading || _page >= _totalPages) return;
     _loading = true;
     final next = _page + 1;
     try {
-      final res = await tmdbDio.get(genreDiscoverUrl(
-          widget.genreId, widget.mediaType, next, widget.extraQuery));
+      final res = await tmdbDio.get(
+        genreDiscoverUrl(
+          widget.genreId,
+          widget.mediaType,
+          next,
+          widget.extraQuery,
+        ),
+      );
       final parsed = SearchResponse.fromJson(res.data);
       _totalPages = parsed.totalPages;
       final now = DateTime.now();
@@ -107,77 +121,54 @@ class _GenreResultsPageState extends State<GenreResultsPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: kDeepBlack,
-      appBar: AppBar(
-        backgroundColor: kDeepBlack,
-        elevation: 0,
-        title: Text(widget.genreName,
-            style: TextStyle(color: kTextWhite, fontSize: 22.s(context))),
-      ),
-      body: _buildBody(context),
-    );
-  }
-
-  Widget _buildBody(BuildContext context) {
+    final Widget body;
     if (_initialLoad) {
-      return const Center(child: CircularProgressIndicator(color: kNetflixRed));
-    }
-    if (_items.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: EdgeInsets.all(24.s(context)),
-          child: Text(
-            _error != null ? 'Couldn\'t load — $_error' : 'Nothing released yet.',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: kTextGrey, fontSize: 14.s(context)),
+      body = const TvPosterGridSkeleton(rows: 3);
+    } else if (_items.isEmpty) {
+      body =
+          _error != null
+              ? _LoadError(onRetry: _retry)
+              : const TvMessage(
+                icon: Icons.movie_filter_outlined,
+                title: 'Nothing released yet',
+              );
+    } else {
+      final hasMore = _page < _totalPages && _error == null;
+      body = CustomScrollView(
+        controller: _scroll,
+        slivers: [
+          _PosterGridSliver(items: _items, defaultMediaType: widget.mediaType),
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(0, 14.s(context), 0, 70.s(context)),
+              child: Center(
+                child:
+                    hasMore
+                        ? SizedBox(
+                          width: 22.s(context),
+                          height: 22.s(context),
+                          child: const CircularProgressIndicator(
+                            color: kNetflixRed,
+                            strokeWidth: 2.5,
+                          ),
+                        )
+                        : Text(
+                          "That's everything",
+                          style: TextStyle(
+                            color: kTextGrey,
+                            fontSize: 12.s(context),
+                          ),
+                        ),
+              ),
+            ),
           ),
-        ),
+        ],
       );
     }
-    final hasMore = _page < _totalPages;
-    return CustomScrollView(
-      controller: _scroll,
-      slivers: [
-        SliverPadding(
-          padding: EdgeInsets.fromLTRB(
-            40.s(context),
-            12.s(context),
-            40.s(context),
-            8.s(context),
-          ),
-          sliver: SliverGrid(
-            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 6,
-              childAspectRatio: 132 / 198,
-              crossAxisSpacing: 14.s(context),
-              mainAxisSpacing: 22.s(context),
-            ),
-            delegate: SliverChildBuilderDelegate(
-              (_, i) => _BrowseCard(
-                item: _items[i],
-                autofocus: i == 0,
-                defaultMediaType: widget.mediaType,
-              ),
-              childCount: _items.length,
-            ),
-          ),
-        ),
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(0, 8.s(context), 0, 60.s(context)),
-            child: Center(
-              child: hasMore
-                  ? const CircularProgressIndicator(color: kNetflixRed)
-                  : Text(
-                      'That\'s everything',
-                      style:
-                          TextStyle(color: kTextGrey, fontSize: 13.s(context)),
-                    ),
-            ),
-          ),
-        ),
-      ],
+    return _BrowseScaffold(
+      title: widget.genreName,
+      subtitle: widget.mediaType == 'tv' ? 'Series' : 'Movies',
+      body: body,
     );
   }
 }
@@ -199,13 +190,7 @@ class PersonFilmographyPage extends StatefulWidget {
 }
 
 class _PersonFilmographyPageState extends State<PersonFilmographyPage> {
-  Future<List<SearchResult>>? _future;
-
-  @override
-  void initState() {
-    super.initState();
-    _future = _load();
-  }
+  late Future<List<SearchResult>> _future = _load();
 
   Future<List<SearchResult>> _load() async {
     final responses = await Future.wait([
@@ -221,6 +206,7 @@ class _PersonFilmographyPageState extends State<PersonFilmographyPage> {
       if (d == null || d.isEmpty) return null;
       final parsed = DateTime.tryParse(d);
       if (parsed == null || parsed.isAfter(now)) return null;
+      if (json['poster_path'] == null) return null;
       return SearchResult(
         id: json['id'] as int,
         title: json['title'] as String?,
@@ -238,186 +224,166 @@ class _PersonFilmographyPageState extends State<PersonFilmographyPage> {
       );
     }
 
-    final movies = (responses[0].data['cast'] as List<dynamic>? ?? [])
-        .map((e) => toResult(e as Map<String, dynamic>, 'movie'))
-        .whereType<SearchResult>()
-        .toList();
-    final tv = (responses[1].data['cast'] as List<dynamic>? ?? [])
-        .map((e) => toResult(e as Map<String, dynamic>, 'tv'))
-        .whereType<SearchResult>()
-        .toList();
-    final merged = [...movies, ...tv]
-      ..sort((a, b) => (b.voteCount ?? 0).compareTo(a.voteCount ?? 0));
+    final movies =
+        (responses[0].data['cast'] as List<dynamic>? ?? [])
+            .map((e) => toResult(e as Map<String, dynamic>, 'movie'))
+            .whereType<SearchResult>();
+    final tv =
+        (responses[1].data['cast'] as List<dynamic>? ?? [])
+            .map((e) => toResult(e as Map<String, dynamic>, 'tv'))
+            .whereType<SearchResult>();
+
+    // An actor can be credited several times on one title (multiple roles);
+    // keep each title once.
+    final seen = <String>{};
+    final merged = [
+      for (final r in [...movies, ...tv])
+        if (seen.add('${r.mediaType}:${r.id}')) r,
+    ]..sort((a, b) => (b.voteCount ?? 0).compareTo(a.voteCount ?? 0));
     return merged;
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: kDeepBlack,
-      appBar: AppBar(
-        backgroundColor: kDeepBlack,
-        elevation: 0,
-        title: Text(widget.personName,
-            style: TextStyle(color: kTextWhite, fontSize: 22.s(context))),
+    return _BrowseScaffold(
+      title: widget.personName,
+      subtitle: 'Filmography',
+      body: FutureBuilder<List<SearchResult>>(
+        future: _future,
+        builder: (context, snap) {
+          if (snap.connectionState != ConnectionState.done) {
+            return const TvPosterGridSkeleton(rows: 3);
+          }
+          if (snap.hasError) {
+            return _LoadError(onRetry: () => setState(() => _future = _load()));
+          }
+          final items = snap.data ?? const <SearchResult>[];
+          if (items.isEmpty) {
+            return const TvMessage(
+              icon: Icons.movie_filter_outlined,
+              title: 'Nothing released yet',
+            );
+          }
+          return CustomScrollView(
+            slivers: [
+              _PosterGridSliver(items: items, defaultMediaType: 'movie'),
+              SliverToBoxAdapter(child: SizedBox(height: 70.s(context))),
+            ],
+          );
+        },
       ),
-      body: _ResultsBody(future: _future!, defaultMediaType: 'movie'),
     );
   }
 }
 
-class _ResultsBody extends StatelessWidget {
-  final Future<List<SearchResult>> future;
-  final String defaultMediaType;
-  const _ResultsBody({required this.future, required this.defaultMediaType});
+class _BrowseScaffold extends StatelessWidget {
+  const _BrowseScaffold({
+    required this.title,
+    required this.subtitle,
+    required this.body,
+  });
+
+  final String title;
+  final String subtitle;
+  final Widget body;
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<List<SearchResult>>(
-      future: future,
-      builder: (ctx, snap) {
-        if (snap.connectionState != ConnectionState.done) {
-          return const Center(
-            child: CircularProgressIndicator(color: kNetflixRed),
-          );
-        }
-        if (snap.hasError) {
-          return Center(
-            child: Padding(
-              padding: EdgeInsets.all(24.s(context)),
-              child: Text(
-                'Couldn\'t load — ${snap.error}',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: kTextGrey, fontSize: 14.s(context)),
-              ),
-            ),
-          );
-        }
-        final items = (snap.data ?? const <SearchResult>[])
-            .where((r) => r.posterPath != null)
-            .toList();
-        if (items.isEmpty) {
-          return Center(
-            child: Text(
-              'Nothing released yet.',
-              style: TextStyle(color: kTextGrey, fontSize: 14.s(context)),
-            ),
-          );
-        }
-        // 6-column grid sized for 1080p TVs; scales with .s(context) for 4K.
-        return GridView.builder(
-          padding: EdgeInsets.fromLTRB(
-            40.s(context),
-            12.s(context),
-            40.s(context),
-            60.s(context),
-          ),
-          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 6,
-            childAspectRatio: 132 / 198,
-            crossAxisSpacing: 14.s(context),
-            mainAxisSpacing: 22.s(context),
-          ),
-          itemCount: items.length,
-          itemBuilder: (_, i) {
-            final r = items[i];
-            return _BrowseCard(
-              item: r,
-              autofocus: i == 0,
-              defaultMediaType: defaultMediaType,
-            );
-          },
-        );
-      },
+    return Scaffold(
+      backgroundColor: kDeepBlack,
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TvPageTitle(title: title, subtitle: subtitle),
+          Expanded(child: body),
+        ],
+      ),
     );
   }
 }
 
-class _BrowseCard extends StatefulWidget {
-  final SearchResult item;
-  final bool autofocus;
-  final String defaultMediaType;
-  const _BrowseCard({
-    required this.item,
-    required this.defaultMediaType,
-    this.autofocus = false,
-  });
+class _LoadError extends StatelessWidget {
+  const _LoadError({required this.onRetry});
+  final VoidCallback onRetry;
 
   @override
-  State<_BrowseCard> createState() => _BrowseCardState();
+  Widget build(BuildContext context) {
+    return TvMessage(
+      icon: Icons.cloud_off_rounded,
+      title: "Couldn't load this page",
+      detail: 'Check your connection and try again.',
+      actions: [
+        TvButton(
+          label: 'Retry',
+          icon: Icons.refresh_rounded,
+          autofocus: true,
+          onPressed: onRetry,
+        ),
+        TvButton(
+          label: 'Go Back',
+          icon: Icons.arrow_back_rounded,
+          onPressed: () => Navigator.pop(context),
+        ),
+      ],
+    );
+  }
 }
 
-class _BrowseCardState extends State<_BrowseCard> {
-  bool _focused = false;
+/// 6-column poster wall; the first card takes focus when the page opens.
+class _PosterGridSliver extends StatelessWidget {
+  const _PosterGridSliver({
+    required this.items,
+    required this.defaultMediaType,
+  });
 
-  void _open() {
+  final List<SearchResult> items;
+  final String defaultMediaType;
+
+  void _open(BuildContext context, SearchResult r) {
+    final date = r.releaseDate ?? r.firstAirDate;
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => MovieDetailsPage(
-          movieId: widget.item.id.toString(),
-          mediaType: widget.item.mediaType ?? widget.defaultMediaType,
-        ),
+        builder:
+            (_) => MovieDetailsPage(
+              movieId: r.id.toString(),
+              mediaType: r.mediaType ?? defaultMediaType,
+              preview: DetailPreview(
+                title: r.title ?? r.name,
+                backdropPath: r.backdropPath,
+                overview: r.overview,
+                year:
+                    (date != null && date.length >= 4)
+                        ? date.substring(0, 4)
+                        : null,
+                rating: r.voteAverage,
+              ),
+            ),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    return Focus(
-      autofocus: widget.autofocus,
-      onFocusChange: (f) => setState(() => _focused = f),
-      onKeyEvent: (n, e) {
-        if (e is KeyDownEvent &&
-            (e.logicalKey == LogicalKeyboardKey.select ||
-                e.logicalKey == LogicalKeyboardKey.enter ||
-                e.logicalKey == LogicalKeyboardKey.space)) {
-          _open();
-          return KeyEventResult.handled;
-        }
-        return KeyEventResult.ignored;
-      },
-      child: GestureDetector(
-        onTap: _open,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          curve: Curves.easeOut,
-          transform: _focused
-              ? (Matrix4.identity()..scale(1.08))
-              : Matrix4.identity(),
-          transformAlignment: Alignment.center,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(6.s(context)),
-            border: Border.all(
-              color: _focused ? kNetflixRed : Colors.transparent,
-              width: 2,
-            ),
-            boxShadow: _focused
-                ? [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.7),
-                      blurRadius: 18.s(context),
-                      offset: Offset(0, 8.s(context)),
-                    ),
-                  ]
-                : [],
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(6.s(context)),
-            child: Image.network(
-              '$imgW300${widget.item.posterPath}',
-              fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) => Container(
-                color: kSurfaceGrey,
-                child: Icon(
-                  Icons.movie_rounded,
-                  color: kTextGrey,
-                  size: 32.s(context),
-                ),
-              ),
-            ),
-          ),
-        ),
+    return SliverPadding(
+      padding: EdgeInsets.fromLTRB(
+        kTvGutter.s(context),
+        12.s(context),
+        kTvGutter.s(context),
+        0,
+      ),
+      sliver: SliverGrid(
+        gridDelegate: tvPosterGridDelegate(context),
+        delegate: SliverChildBuilderDelegate((context, i) {
+          final r = items[i];
+          return TvPosterCard(
+            width: double.infinity,
+            autofocus: i == 0,
+            posterPath: r.posterPath,
+            title: r.title ?? r.name,
+            onPressed: () => _open(context, r),
+          );
+        }, childCount: items.length),
       ),
     );
   }

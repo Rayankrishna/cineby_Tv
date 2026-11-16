@@ -10,10 +10,10 @@ const double kTvDesignWidth = 960.0;
 
 extension TvScale on num {
   double s(BuildContext ctx) {
-    final factor = MediaQuery.of(ctx).size.width / kTvDesignWidth;
+    final factor = MediaQuery.sizeOf(ctx).width / kTvDesignWidth;
     return this * factor.clamp(0.75, 3.0);
   }
 }
 
 double tvScaleFactor(BuildContext ctx) =>
-    (MediaQuery.of(ctx).size.width / kTvDesignWidth).clamp(0.75, 3.0);
+    (MediaQuery.sizeOf(ctx).width / kTvDesignWidth).clamp(0.75, 3.0);

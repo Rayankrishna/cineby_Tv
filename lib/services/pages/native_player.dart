@@ -425,7 +425,7 @@ class _NativePlayerPageState extends State<NativePlayerPage> {
           ),
           child: ConstrainedBox(
             constraints: BoxConstraints(maxWidth: 520.s(context)),
-            child: Padding(
+            child: SingleChildScrollView(
               padding: EdgeInsets.symmetric(vertical: 18.s(context)),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -557,13 +557,29 @@ class _NativePlayerPageState extends State<NativePlayerPage> {
             if (_initialized && !_hasError && _showSubtitles)
               _buildCaption(context),
 
-            if (_initialized && !_hasError && _seekHint != null)
-              _buildSeekHint(context),
+            if (_initialized && !_hasError)
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 160),
+                child: _seekHint == null
+                    ? const SizedBox.shrink()
+                    : KeyedSubtree(
+                        key: ValueKey(_seekHint!.startsWith('-')),
+                        child: _buildSeekHint(context),
+                      ),
+              ),
 
-            if (_initialized && !_hasError && _showControls)
-              ValueListenableBuilder<VideoPlayerValue>(
-                valueListenable: _controller,
-                builder: (_, __, ___) => _buildControls(context),
+            // Controls fade in and out rather than popping on every key.
+            if (_initialized && !_hasError)
+              IgnorePointer(
+                child: AnimatedOpacity(
+                  opacity: _showControls ? 1 : 0,
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOut,
+                  child: ValueListenableBuilder<VideoPlayerValue>(
+                    valueListenable: _controller,
+                    builder: (_, __, ___) => _buildControls(context),
+                  ),
+                ),
               ),
           ],
         ),
@@ -685,10 +701,14 @@ class _NativePlayerPageState extends State<NativePlayerPage> {
           ),
           // Center play/pause icon
           Center(
-            child: Icon(
-              value.isPlaying ? Icons.pause_circle : Icons.play_circle,
-              color: Colors.white.withOpacity(0.9),
-              size: 96.s(context),
+            child: AnimatedOpacity(
+              opacity: value.isPlaying ? 0 : 1,
+              duration: const Duration(milliseconds: 180),
+              child: Icon(
+                Icons.play_circle,
+                color: Colors.white.withValues(alpha: 0.9),
+                size: 84.s(context),
+              ),
             ),
           ),
           // Bottom seek bar + times
@@ -699,21 +719,48 @@ class _NativePlayerPageState extends State<NativePlayerPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Container(
-                  height: 4.s(context),
-                  decoration: BoxDecoration(
-                    color: Colors.white24,
-                    borderRadius: BorderRadius.circular(2.s(context)),
-                  ),
-                  child: FractionallySizedBox(
-                    alignment: Alignment.centerLeft,
-                    widthFactor: progress.clamp(0.0, 1.0),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: kNetflixRed,
-                        borderRadius: BorderRadius.circular(2.s(context)),
-                      ),
-                    ),
+                SizedBox(
+                  height: 12.s(context),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final knob = 12.s(context);
+                      final track = 4.s(context);
+                      final played =
+                          constraints.maxWidth * progress.clamp(0.0, 1.0);
+                      return Stack(
+                        alignment: Alignment.centerLeft,
+                        clipBehavior: Clip.none,
+                        children: [
+                          Container(
+                            height: track,
+                            decoration: BoxDecoration(
+                              color: Colors.white24,
+                              borderRadius: BorderRadius.circular(track),
+                            ),
+                          ),
+                          Container(
+                            height: track,
+                            width: played,
+                            decoration: BoxDecoration(
+                              color: kNetflixRed,
+                              borderRadius: BorderRadius.circular(track),
+                            ),
+                          ),
+                          Positioned(
+                            left: (played - knob / 2)
+                                .clamp(0.0, constraints.maxWidth - knob),
+                            child: Container(
+                              width: knob,
+                              height: knob,
+                              decoration: const BoxDecoration(
+                                color: kNetflixRed,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
                   ),
                 ),
                 SizedBox(height: 8.s(context)),
@@ -731,9 +778,14 @@ class _NativePlayerPageState extends State<NativePlayerPage> {
                           color: Colors.white70,
                           size: 18.s(context),
                         ),
-                        SizedBox(width: 4.s(context)),
+                        SizedBox(width: 6.s(context)),
+                        Icon(
+                          Icons.keyboard_arrow_up_rounded,
+                          color: Colors.white54,
+                          size: 16.s(context),
+                        ),
                         Text(
-                          'C',
+                          'Subtitles & sources',
                           style: TextStyle(color: Colors.white54, fontSize: 12.s(context)),
                         ),
                       ],

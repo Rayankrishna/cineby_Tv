@@ -1,295 +1,422 @@
+import 'dart:async';
+
+import 'package:cineby_tv/models/search_model.dart';
 import 'package:cineby_tv/services/config.dart';
 import 'package:cineby_tv/services/pages/details.dart';
+import 'package:cineby_tv/services/tmdb_client.dart';
 import 'package:cineby_tv/stores/search_store.dart';
 import 'package:cineby_tv/utils/tv_scale.dart';
+import 'package:cineby_tv/widgets/tv_focus.dart';
+import 'package:cineby_tv/widgets/tv_widgets.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_mobx/flutter_mobx.dart';
-import 'package:flutter/services.dart';
+
+/// How long to wait after the last key before querying, so results don't
+/// reload (and flicker) on every letter.
+const Duration _searchDelay = Duration(milliseconds: 350);
+
+const int _resultColumns = 5;
 
 class SearchPage extends StatefulWidget {
-  const SearchPage({super.key});
+  const SearchPage({super.key, this.tab});
+  final TvTabHandle? tab;
 
   @override
   State<SearchPage> createState() => _SearchPageState();
 }
 
 class _SearchPageState extends State<SearchPage> {
-  final SearchStore _searchStore = SearchStore();
-  final List<String> _keyboard = [
-    'A', 'B', 'C', 'D', 'E', 'F',
-    'G', 'H', 'I', 'J', 'K', 'L',
-    'M', 'N', 'O', 'P', 'Q', 'R',
-    'S', 'T', 'U', 'V', 'W', 'X',
-    'Y', 'Z', '1', '2', '3', '4',
-    '5', '6', '7', '8', '9', '0',
-    'SPACE', 'BACK', 'CLEAR'
+  final SearchStore _store = SearchStore();
+
+  static const List<String> _keys = [
+    'A',
+    'B',
+    'C',
+    'D',
+    'E',
+    'F',
+    'G',
+    'H',
+    'I',
+    'J',
+    'K',
+    'L',
+    'M',
+    'N',
+    'O',
+    'P',
+    'Q',
+    'R',
+    'S',
+    'T',
+    'U',
+    'V',
+    'W',
+    'X',
+    'Y',
+    'Z',
+    '1',
+    '2',
+    '3',
+    '4',
+    '5',
+    '6',
+    '7',
+    '8',
+    '9',
+    '0',
   ];
+
+  String _query = '';
+
+  /// True between a key press and the debounced request actually starting.
+  bool _pending = false;
+  Timer? _debounce;
+
+  /// Shown before the user types anything.
+  List<SearchResult> _suggestions = const [];
+
+  /// The "A" key: where focus lands when entering the page, so the user can
+  /// start typing straight away rather than landing in the suggestions.
+  final FocusNode _firstKeyNode = FocusNode(debugLabel: 'search-key-a');
+
+  @override
+  void initState() {
+    super.initState();
+    widget.tab?.entryNode = _firstKeyNode;
+    _loadSuggestions();
+  }
+
+  @override
+  void dispose() {
+    if (widget.tab?.entryNode == _firstKeyNode) widget.tab?.entryNode = null;
+    _debounce?.cancel();
+    _firstKeyNode.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadSuggestions() async {
+    try {
+      final res = await tmdbDio.get(homeUrl);
+      final items =
+          SearchResponse.fromJson(res.data).results
+              .where((r) => r.posterPath != null && r.mediaType != 'person')
+              .toList();
+      if (mounted) setState(() => _suggestions = items);
+    } catch (_) {
+      // Suggestions are optional; the keyboard still works.
+    }
+  }
+
+  void _setQuery(String value) {
+    _debounce?.cancel();
+    final empty = value.trim().isEmpty;
+    setState(() {
+      _query = value;
+      _pending = !empty;
+    });
+    if (empty) {
+      _store.setSearchQuery('');
+      return;
+    }
+    _debounce = Timer(_searchDelay, () {
+      if (!mounted) return;
+      setState(() => _pending = false);
+      _store.setSearchQuery(value);
+    });
+  }
+
+  void _open(SearchResult r) {
+    final date = r.releaseDate ?? r.firstAirDate;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder:
+            (_) => MovieDetailsPage(
+              movieId: r.id.toString(),
+              mediaType: r.mediaType ?? 'movie',
+              preview: DetailPreview(
+                title: r.title ?? r.name,
+                backdropPath: r.backdropPath,
+                overview: r.overview,
+                year:
+                    (date != null && date.length >= 4)
+                        ? date.substring(0, 4)
+                        : null,
+                rating: r.voteAverage,
+              ),
+            ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: kDeepBlack,
-      body: Row(
+    return ColoredBox(
+      color: kDeepBlack,
+      child: Padding(
+        padding: EdgeInsets.only(top: kTvNavHeight.s(context)),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(width: 292.s(context), child: _buildKeyboard(context)),
+            Expanded(child: Observer(builder: (_) => _buildResults(context))),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ============== KEYBOARD ==============
+
+  Widget _buildKeyboard(BuildContext context) {
+    final gap = 6.s(context);
+    final typed = _query.isNotEmpty;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        kTvGutter.s(context),
+        14.s(context),
+        12.s(context),
+        0,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          // Custom TV Sidebar Keyboard
           Container(
-            width: 350.s(context),
-            color: kSurfaceGrey,
-            padding: EdgeInsets.all(20.s(context)),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            height: 40.s(context),
+            padding: EdgeInsets.symmetric(horizontal: 10.s(context)),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.07),
+              borderRadius: BorderRadius.circular(5.s(context)),
+            ),
+            child: Row(
               children: [
-                SizedBox(height: 20.s(context)),
-                Text(
-                  "SEARCH",
-                  style: TextStyle(
-                    color: kTextGrey,
-                    fontSize: 14.s(context),
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 2.s(context),
-                  ),
+                Icon(
+                  Icons.search_rounded,
+                  color: typed ? kTextWhite : kTextGrey,
+                  size: 20.s(context),
                 ),
-                SizedBox(height: 10.s(context)),
-                Observer(
-                  builder: (_) => Text(
-                    _searchStore.searchQuery.isEmpty ? "Type to search..." : _searchStore.searchQuery.toUpperCase(),
-                    style: TextStyle(
-                      color: _searchStore.searchQuery.isEmpty ? kTextGrey : kTextWhite,
-                      fontSize: 28.s(context),
-                      fontWeight: FontWeight.bold,
-                    ),
+                SizedBox(width: 8.s(context)),
+                Expanded(
+                  child: Text(
+                    typed ? _query : 'Search movies and shows',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                SizedBox(height: 30.s(context)),
-                Expanded(
-                  child: GridView.builder(
-                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: 6,
-                      mainAxisSpacing: 8.s(context),
-                      crossAxisSpacing: 8.s(context),
-                      childAspectRatio: 1,
+                    style: TextStyle(
+                      color: typed ? kTextWhite : kTextGrey,
+                      fontSize: (typed ? 16 : 13).s(context),
+                      fontWeight: typed ? FontWeight.w700 : FontWeight.w400,
+                      letterSpacing: typed ? 1.s(context) : 0,
                     ),
-                    itemCount: _keyboard.length,
-                    itemBuilder: (context, index) {
-                      final key = _keyboard[index];
-                      return _KeyboardButton(
-                        label: key,
-                        onPressed: () {
-                          if (key == 'BACK') {
-                            if (_searchStore.searchQuery.isNotEmpty) {
-                              _searchStore.setSearchQuery(
-                                _searchStore.searchQuery.substring(0, _searchStore.searchQuery.length - 1),
-                              );
-                            }
-                          } else if (key == 'CLEAR') {
-                            _searchStore.setSearchQuery('');
-                          } else if (key == 'SPACE') {
-                            _searchStore.setSearchQuery('${_searchStore.searchQuery} ');
-                          } else {
-                            _searchStore.setSearchQuery('${_searchStore.searchQuery}$key');
-                          }
-                        },
-                      );
-                    },
                   ),
                 ),
               ],
             ),
           ),
-          // Search Results
-          Expanded(
-            child: Observer(
-              builder: (_) {
-                if (_searchStore.searchQuery.isEmpty) {
-                  return Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.search, color: kSurfaceGrey, size: 100.s(context)),
-                        SizedBox(height: 20.s(context)),
-                        Text(
-                          "Search for your favorite movies and shows",
-                          style: TextStyle(color: kTextGrey, fontSize: 18.s(context)),
-                        ),
-                      ],
+          SizedBox(height: 14.s(context)),
+          for (var row = 0; row < _keys.length ~/ 6; row++)
+            Padding(
+              padding: EdgeInsets.only(bottom: gap),
+              child: Row(
+                children: [
+                  for (var col = 0; col < 6; col++) ...[
+                    if (col > 0) SizedBox(width: gap),
+                    Expanded(
+                      child: _Key(
+                        label: _keys[row * 6 + col],
+                        focusNode: row == 0 && col == 0 ? _firstKeyNode : null,
+                        onPressed:
+                            () => _setQuery('$_query${_keys[row * 6 + col]}'),
+                      ),
                     ),
-                  );
-                }
-
-                if (_searchStore.isLoading) {
-                  return const Center(child: CircularProgressIndicator(color: kNetflixRed));
-                }
-
-                final results = _searchStore.searchResults;
-                if (results.isEmpty) {
-                  return Center(
-                    child: Text("No results found", style: TextStyle(color: kTextGrey, fontSize: 18.s(context))),
-                  );
-                }
-
-                return GridView.builder(
-                  padding: EdgeInsets.all(40.s(context)),
-                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 4,
-                    childAspectRatio: 0.7,
-                    crossAxisSpacing: 20.s(context),
-                    mainAxisSpacing: 20.s(context),
-                  ),
-                  itemCount: results.length,
-                  itemBuilder: (context, index) {
-                    final result = results[index];
-                    return _SearchResultCard(
-                      result: result,
-                      onPressed: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => MovieDetailsPage(
-                              movieId: result.id.toString(),
-                              mediaType: result.mediaType ?? 'movie',
-                            ),
-                          ),
-                        );
-                      },
-                    );
-                  },
-                );
-              },
+                  ],
+                ],
+              ),
             ),
+          Row(
+            children: [
+              Expanded(
+                flex: 3,
+                child: _Key(
+                  icon: Icons.space_bar_rounded,
+                  label: 'Space',
+                  onPressed: () {
+                    if (_query.isNotEmpty && !_query.endsWith(' ')) {
+                      _setQuery('$_query ');
+                    }
+                  },
+                ),
+              ),
+              SizedBox(width: gap),
+              Expanded(
+                flex: 2,
+                child: _Key(
+                  icon: Icons.backspace_outlined,
+                  onPressed: () {
+                    if (_query.isNotEmpty) {
+                      _setQuery(_query.substring(0, _query.length - 1));
+                    }
+                  },
+                ),
+              ),
+              SizedBox(width: gap),
+              Expanded(
+                flex: 2,
+                child: _Key(label: 'Clear', onPressed: () => _setQuery('')),
+              ),
+            ],
           ),
         ],
       ),
     );
   }
-}
 
-class _KeyboardButton extends StatelessWidget {
-  final String label;
-  final VoidCallback onPressed;
+  // ============== RESULTS ==============
 
-  const _KeyboardButton({
-    required this.label,
-    required this.onPressed,
-  });
+  Widget _buildResults(BuildContext context) {
+    final query = _query.trim();
+    final padding = EdgeInsets.fromLTRB(
+      16.s(context),
+      10.s(context),
+      kTvGutter.s(context),
+      70.s(context),
+    );
 
-  @override
-  Widget build(BuildContext context) {
-    return Focus(
-      onKeyEvent: (node, event) {
-        if (event is KeyDownEvent &&
-            (event.logicalKey == LogicalKeyboardKey.select ||
-                event.logicalKey == LogicalKeyboardKey.enter ||
-                event.logicalKey == LogicalKeyboardKey.space)) {
-          onPressed();
-          return KeyEventResult.handled;
-        }
-        return KeyEventResult.ignored;
-      },
-      child: Builder(
-        builder: (context) {
-          final hasFocus = Focus.of(context).hasFocus;
-          return GestureDetector(
-            onTap: onPressed,
-            child: Container(
-              height: null,
-              width: null,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: hasFocus ? kTextWhite : kSurfaceGrey,
-                borderRadius: BorderRadius.circular(4.s(context)),
-                border: hasFocus ? null : Border.all(color: Colors.white10),
-              ),
-              child: Text(
-                label,
-                style: TextStyle(
-                  color: hasFocus ? kDeepBlack : kTextWhite,
-                  fontSize: (label.length > 1 ? 12 : 18).s(context),
-                  fontWeight: FontWeight.bold,
-                ),
+    if (query.isEmpty) {
+      if (_suggestions.isEmpty) {
+        return const TvMessage(
+          icon: Icons.search_rounded,
+          title: 'Find something to watch',
+          detail: 'Search by title using the keyboard.',
+        );
+      }
+      return _grid(context, 'Trending Searches', _suggestions, padding);
+    }
+
+    final results = _store.searchResults;
+    final busy = _pending || _store.isLoading;
+    // Results on screen belong to an older query while the next one loads.
+    final stale = busy || _store.searchQuery.trim() != query;
+
+    if (results.isEmpty) {
+      if (stale) {
+        return Padding(
+          padding: EdgeInsets.only(top: 34.s(context)),
+          child: TvPosterGridSkeleton(
+            columns: _resultColumns,
+            padding: padding,
+          ),
+        );
+      }
+      return TvMessage(
+        icon: Icons.search_off_rounded,
+        title: 'No matches for "$query"',
+        detail: 'Check the spelling or try a shorter title.',
+      );
+    }
+    return AnimatedOpacity(
+      opacity: stale ? 0.45 : 1,
+      duration: TvMotion.focus,
+      child: _grid(context, 'Results for "$query"', results, padding),
+    );
+  }
+
+  Widget _grid(
+    BuildContext context,
+    String heading,
+    List<SearchResult> items,
+    EdgeInsets padding,
+  ) {
+    return CustomScrollView(
+      slivers: [
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: EdgeInsets.only(
+              left: padding.left,
+              top: 16.s(context),
+              bottom: 4.s(context),
+            ),
+            child: Text(
+              heading,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: kTextWhite,
+                fontSize: 16.s(context),
+                fontWeight: FontWeight.w700,
               ),
             ),
-          );
-        },
-      ),
+          ),
+        ),
+        SliverPadding(
+          padding: padding,
+          sliver: SliverGrid(
+            gridDelegate: tvPosterGridDelegate(
+              context,
+              columns: _resultColumns,
+            ),
+            delegate: SliverChildBuilderDelegate((context, i) {
+              final r = items[i];
+              return TvPosterCard(
+                width: double.infinity,
+                posterPath: r.posterPath,
+                title: r.title ?? r.name,
+                onPressed: () => _open(r),
+              );
+            }, childCount: items.length),
+          ),
+        ),
+      ],
     );
   }
 }
 
-class _SearchResultCard extends StatelessWidget {
-  final dynamic result;
-  final VoidCallback onPressed;
+class _Key extends StatelessWidget {
+  const _Key({required this.onPressed, this.label, this.icon, this.focusNode});
 
-  const _SearchResultCard({required this.result, required this.onPressed});
+  final String? label;
+  final IconData? icon;
+  final FocusNode? focusNode;
+  final VoidCallback onPressed;
 
   @override
   Widget build(BuildContext context) {
-    return Focus(
-      onKeyEvent: (node, event) {
-        if (event is KeyDownEvent &&
-            (event.logicalKey == LogicalKeyboardKey.select ||
-                event.logicalKey == LogicalKeyboardKey.enter ||
-                event.logicalKey == LogicalKeyboardKey.space)) {
-          onPressed();
-          return KeyEventResult.handled;
-        }
-        return KeyEventResult.ignored;
+    final label = this.label;
+    return TvFocusable(
+      reveal: false,
+      focusNode: focusNode,
+      onPressed: onPressed,
+      builder: (context, focused) {
+        final fg = focused ? Colors.black : kTextWhite;
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 110),
+          curve: Curves.easeOut,
+          height: 34.s(context),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color:
+                focused ? Colors.white : Colors.white.withValues(alpha: 0.07),
+            borderRadius: BorderRadius.circular(5.s(context)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (icon != null) Icon(icon, color: fg, size: 17.s(context)),
+              if (icon != null && label != null) SizedBox(width: 5.s(context)),
+              if (label != null)
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: fg,
+                    fontSize: (label.length > 1 ? 12 : 15).s(context),
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+            ],
+          ),
+        );
       },
-      child: Builder(
-        builder: (context) {
-          final hasFocus = Focus.of(context).hasFocus;
-          return GestureDetector(
-            onTap: onPressed,
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(8.s(context)),
-                border: Border.all(
-                  color: hasFocus ? Colors.white : Colors.transparent,
-                  width: 3.s(context),
-                ),
-              ),
-              transform: hasFocus ? (Matrix4.identity()..scale(1.05)) : Matrix4.identity(),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(5.s(context)),
-                child: Column(
-                  children: [
-                    Expanded(
-                      child: result.posterPath != null
-                          ? Image.network(
-                              "https://image.tmdb.org/t/p/w300${result.posterPath}",
-                              fit: BoxFit.cover,
-                              width: double.infinity,
-                            )
-                          : Container(
-                              color: kSurfaceGrey,
-                              width: double.infinity,
-                              child: Icon(Icons.movie, color: Colors.white54, size: 50.s(context)),
-                            ),
-                    ),
-                    Container(
-                      padding: EdgeInsets.all(8.s(context)),
-                      width: double.infinity,
-                      color: hasFocus ? Colors.white : kSurfaceGrey,
-                      child: Text(
-                        result.title ?? result.name ?? 'Unknown',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: hasFocus ? kDeepBlack : kTextWhite,
-                          fontSize: 12.s(context),
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          );
-        },
-      ),
     );
   }
 }
