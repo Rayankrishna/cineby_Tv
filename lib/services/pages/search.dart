@@ -9,6 +9,7 @@ import 'package:cineby_tv/utils/tv_scale.dart';
 import 'package:cineby_tv/widgets/tv_focus.dart';
 import 'package:cineby_tv/widgets/tv_widgets.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_mobx/flutter_mobx.dart';
 
 /// How long to wait after the last key before querying, so results don't
@@ -73,6 +74,10 @@ class _SearchPageState extends State<SearchPage> {
   bool _pending = false;
   Timer? _debounce;
 
+  /// Owns the results grid's scroll view, so a new query can start at the top
+  /// instead of inheriting the offset the previous one was left at.
+  final ScrollController _results = ScrollController();
+
   /// Shown before the user types anything.
   List<SearchResult> _suggestions = const [];
 
@@ -91,6 +96,7 @@ class _SearchPageState extends State<SearchPage> {
   void dispose() {
     if (widget.tab?.entryNode == _firstKeyNode) widget.tab?.entryNode = null;
     _debounce?.cancel();
+    _results.dispose();
     _firstKeyNode.dispose();
     super.dispose();
   }
@@ -111,6 +117,9 @@ class _SearchPageState extends State<SearchPage> {
   void _setQuery(String value) {
     _debounce?.cancel();
     final empty = value.trim().isEmpty;
+    // A new query is a new result set: start it at the top instead of
+    // inheriting the offset the last one was scrolled to.
+    if (value != _query && _results.hasClients) _results.jumpTo(0);
     setState(() {
       _query = value;
       _pending = !empty;
@@ -159,7 +168,13 @@ class _SearchPageState extends State<SearchPage> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            SizedBox(width: 292.s(context), child: _buildKeyboard(context)),
+            SizedBox(
+              width: 292.s(context),
+              child: TvSection(
+                onKeyEvent: _onKeyboardKey,
+                child: _buildKeyboard(context),
+              ),
+            ),
             Expanded(child: Observer(builder: (_) => _buildResults(context))),
           ],
         ),
@@ -168,6 +183,27 @@ class _SearchPageState extends State<SearchPage> {
   }
 
   // ============== KEYBOARD ==============
+
+  /// Nothing sits below the Space/Backspace/Clear row, so Flutter's
+  /// out-of-band directional fallback would throw focus sideways into the
+  /// middle of the results grid. Swallow DOWN whenever the keyboard itself
+  /// holds no node the policy could have moved to.
+  KeyEventResult _onKeyboardKey(FocusNode node, KeyEvent event) {
+    if (event is KeyUpEvent) return KeyEventResult.ignored;
+    if (event.logicalKey != LogicalKeyboardKey.arrowDown) {
+      return KeyEventResult.ignored;
+    }
+    final cur = FocusManager.instance.primaryFocus;
+    if (cur == null || cur.context == null) return KeyEventResult.ignored;
+    final below = node.descendants.any(
+      (n) =>
+          n.canRequestFocus &&
+          !n.skipTraversal &&
+          n.context != null &&
+          n.rect.center.dy >= cur.rect.bottom,
+    );
+    return below ? KeyEventResult.ignored : KeyEventResult.handled;
+  }
 
   Widget _buildKeyboard(BuildContext context) {
     final gap = 6.s(context);
@@ -299,6 +335,31 @@ class _SearchPageState extends State<SearchPage> {
     // Results on screen belong to an older query while the next one loads.
     final stale = busy || _store.searchQuery.trim() != query;
 
+    // A failed query must never leave the previous query's results on screen.
+    if (!busy &&
+        _store.errorMessage != null &&
+        _store.searchQuery.trim() == query) {
+      return TvMessage(
+        icon: Icons.cloud_off_rounded,
+        title: "Couldn't search",
+        detail: 'Check your connection and try again.',
+        actions: [
+          TvButton(
+            label: 'Retry',
+            icon: Icons.refresh_rounded,
+            onPressed: () {
+              // This card unmounts the instant the refetch flips `busy`, so
+              // hand focus back to the keyboard first; otherwise it falls to
+              // the root scope and the D-pad goes dead until BACK.
+              FocusManager.instance.primaryFocus
+                  ?.focusInDirection(TraversalDirection.left);
+              _store.fetchSearchResults(query);
+            },
+          ),
+        ],
+      );
+    }
+
     if (results.isEmpty) {
       if (stale) {
         return Padding(
@@ -329,6 +390,7 @@ class _SearchPageState extends State<SearchPage> {
     EdgeInsets padding,
   ) {
     return CustomScrollView(
+      controller: _results,
       slivers: [
         SliverToBoxAdapter(
           child: Padding(
@@ -390,8 +452,8 @@ class _Key extends StatelessWidget {
       builder: (context, focused) {
         final fg = focused ? Colors.black : kTextWhite;
         return AnimatedContainer(
-          duration: const Duration(milliseconds: 110),
-          curve: Curves.easeOut,
+          duration: TvMotion.focus,
+          curve: TvMotion.curve,
           height: 34.s(context),
           alignment: Alignment.center,
           decoration: BoxDecoration(

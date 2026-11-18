@@ -102,10 +102,11 @@ class _GenreResultsPageState extends State<GenreResultsPage> {
         _page = next;
         _items.addAll(fresh);
         _initialLoad = false;
+        _error = null; // a later page landing repairs a stale footer
       });
       if (fresh.isEmpty && _page < _totalPages) {
         _loading = false;
-        _loadNextPage();
+        await _loadNextPage();
         return;
       }
     } catch (e) {
@@ -128,12 +129,21 @@ class _GenreResultsPageState extends State<GenreResultsPage> {
       body =
           _error != null
               ? _LoadError(onRetry: _retry)
-              : const TvMessage(
+              : TvMessage(
                 icon: Icons.movie_filter_outlined,
                 title: 'Nothing released yet',
+                actions: [
+                  TvButton(
+                    label: 'Go Back',
+                    icon: Icons.arrow_back_rounded,
+                    autofocus: true,
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ],
               );
     } else {
-      final hasMore = _page < _totalPages && _error == null;
+      final failed = _error != null;
+      final hasMore = _page < _totalPages && !failed;
       body = CustomScrollView(
         controller: _scroll,
         slivers: [
@@ -153,7 +163,9 @@ class _GenreResultsPageState extends State<GenreResultsPage> {
                           ),
                         )
                         : Text(
-                          "That's everything",
+                          failed
+                              ? "Couldn't load more — scroll to try again"
+                              : "That's everything",
                           style: TextStyle(
                             color: kTextGrey,
                             fontSize: 12.s(context),
@@ -259,9 +271,17 @@ class _PersonFilmographyPageState extends State<PersonFilmographyPage> {
           }
           final items = snap.data ?? const <SearchResult>[];
           if (items.isEmpty) {
-            return const TvMessage(
+            return TvMessage(
               icon: Icons.movie_filter_outlined,
               title: 'Nothing released yet',
+              actions: [
+                TvButton(
+                  label: 'Go Back',
+                  icon: Icons.arrow_back_rounded,
+                  autofocus: true,
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
             );
           }
           return CustomScrollView(

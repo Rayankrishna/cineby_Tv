@@ -19,6 +19,10 @@ class LibraryPage extends StatefulWidget {
 class _LibraryPageState extends State<LibraryPage> {
   int _tab = 0;
 
+  /// True once focus is already resting on the chip row, so arrowing between
+  /// the chips previews a tab but arriving from the grid below does not.
+  bool _chipsHadFocus = false;
+
   @override
   void initState() {
     super.initState();
@@ -28,6 +32,12 @@ class _LibraryPageState extends State<LibraryPage> {
 
   void _showTab(int tab) {
     if (_tab != tab) setState(() => _tab = tab);
+  }
+
+  void _onChipFocus(int tab, bool focused) {
+    if (!focused) return;
+    if (_chipsHadFocus) _showTab(tab);
+    _chipsHadFocus = true;
   }
 
   @override
@@ -47,39 +57,42 @@ class _LibraryPageState extends State<LibraryPage> {
                 gutter,
                 8.s(context),
               ),
-              child: TvRowFocusGroup(
-                child: Row(
-                  children: [
-                    Text(
-                      'My List',
-                      style: TextStyle(
-                        color: kTextWhite,
-                        fontSize: 26.s(context),
-                        fontWeight: FontWeight.w800,
+              // Focus leaving the chip row clears the preview guard, so the
+              // next arrival from the grid below only moves the focus ring.
+              child: TvSection(
+                onFocusChange: (f) {
+                  if (!f) _chipsHadFocus = false;
+                },
+                child: TvRowFocusGroup(
+                  child: Row(
+                    children: [
+                      Text(
+                        'My List',
+                        style: TextStyle(
+                          color: kTextWhite,
+                          fontSize: 26.s(context),
+                          fontWeight: FontWeight.w800,
+                        ),
                       ),
-                    ),
-                    SizedBox(width: 22.s(context)),
-                    // Moving focus onto a tab shows it straight away.
-                    TvChip(
-                      label: 'Watchlist',
-                      icon: Icons.bookmark_rounded,
-                      selected: _tab == 0,
-                      onFocusChange: (f) {
-                        if (f) _showTab(0);
-                      },
-                      onPressed: () => _showTab(0),
-                    ),
-                    SizedBox(width: 8.s(context)),
-                    TvChip(
-                      label: 'History',
-                      icon: Icons.history_rounded,
-                      selected: _tab == 1,
-                      onFocusChange: (f) {
-                        if (f) _showTab(1);
-                      },
-                      onPressed: () => _showTab(1),
-                    ),
-                  ],
+                      SizedBox(width: 22.s(context)),
+                      // Arrowing between the tabs shows one straight away.
+                      TvChip(
+                        label: 'Watchlist',
+                        icon: Icons.bookmark_rounded,
+                        selected: _tab == 0,
+                        onFocusChange: (f) => _onChipFocus(0, f),
+                        onPressed: () => _showTab(0),
+                      ),
+                      SizedBox(width: 8.s(context)),
+                      TvChip(
+                        label: 'History',
+                        icon: Icons.history_rounded,
+                        selected: _tab == 1,
+                        onFocusChange: (f) => _onChipFocus(1, f),
+                        onPressed: () => _showTab(1),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -172,11 +185,7 @@ class _HistoryList extends StatelessWidget {
       builder: (_) {
         final items = historyStore.items;
         if (items.isEmpty) {
-          if (historyStore.isLoading) {
-            return const Center(
-              child: CircularProgressIndicator(color: kNetflixRed),
-            );
-          }
+          if (historyStore.isLoading) return const _HistoryListSkeleton();
           return const TvMessage(
             icon: Icons.history_rounded,
             title: 'No history yet',
@@ -313,7 +322,18 @@ class _HistoryTile extends StatelessWidget {
           ),
           SizedBox(width: 10.s(context)),
           TvFocusable(
-            onPressed: () => historyStore.remove(item.id),
+            onPressed: () {
+              // Hand focus to a neighbour BEFORE this row unmounts. Disposing
+              // the focused node drops focus to the root scope, which sits
+              // above every Shortcuts/Actions in the app, so no key event
+              // reaches traversal and the D-pad goes dead until BACK.
+              final node = FocusManager.instance.primaryFocus;
+              if (node != null &&
+                  !node.focusInDirection(TraversalDirection.down)) {
+                node.focusInDirection(TraversalDirection.up);
+              }
+              historyStore.remove(item.id);
+            },
             builder: (context, focused) {
               return AnimatedContainer(
                 duration: TvMotion.focus,
@@ -336,6 +356,68 @@ class _HistoryTile extends StatelessWidget {
             },
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Placeholder rows that match [_HistoryTile]'s geometry, so the swap to real
+/// history does not shift anything.
+class _HistoryListSkeleton extends StatelessWidget {
+  const _HistoryListSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    final thumbWidth = 112.s(context);
+    return TvPulse(
+      child: ListView.builder(
+        physics: const NeverScrollableScrollPhysics(),
+        padding: EdgeInsets.fromLTRB(
+          kTvGutter.s(context),
+          8.s(context),
+          kTvGutter.s(context),
+          70.s(context),
+        ),
+        itemCount: 5,
+        itemBuilder:
+            (context, _) => Padding(
+              padding: EdgeInsets.only(bottom: 8.s(context)),
+              child: Container(
+                // 7 padding + 2 border of the real tile.
+                padding: EdgeInsets.all(9.s(context)),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.05),
+                  borderRadius: BorderRadius.circular(7.s(context)),
+                ),
+                child: Row(
+                  children: [
+                    TvSkeletonBox(
+                      width: thumbWidth,
+                      height: thumbWidth * 9 / 16,
+                      radius: 4,
+                    ),
+                    SizedBox(width: 14.s(context)),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          TvSkeletonBox(
+                            width: 180.s(context),
+                            height: 13.s(context),
+                          ),
+                          SizedBox(height: 8.s(context)),
+                          TvSkeletonBox(
+                            width: 110.s(context),
+                            height: 10.s(context),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
       ),
     );
   }

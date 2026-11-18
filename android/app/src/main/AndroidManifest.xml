@@ -37,12 +37,6 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
-        <!-- Impeller-Vulkan crashes on this AVD's emulated GPU (SurfaceSyncGroup
-             timeout → emulator dies). Force the legacy Skia/OpenGL backend.
-             Must be a child of <application>, not <activity>. -->
-        <meta-data
-            android:name="io.flutter.embedding.android.EnableImpeller"
-            android:value="false" />
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and

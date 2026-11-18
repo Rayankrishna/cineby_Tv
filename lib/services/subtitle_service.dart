@@ -61,10 +61,18 @@ class SubtitleTrack {
     this.release,
   });
 
-  /// Display label, e.g. "English (OpenSubtitles)".
+  /// Display label, e.g. "English (OpenSubtitles)". Providers report the
+  /// language lower-cased, so it is title-cased here; the release name is
+  /// appended when there is one because several tracks of the same language
+  /// are otherwise indistinguishable in the picker.
   String get label {
     final tag = source == SubtitleSource.yify ? 'YIFY' : 'OpenSubtitles';
-    return '$language ($tag)';
+    final lang = language.isEmpty
+        ? 'Unknown'
+        : language[0].toUpperCase() + language.substring(1);
+    final extra = (release ?? '').trim();
+    if (extra.isEmpty) return '$lang ($tag)';
+    return '$lang · $extra';
   }
 }
 

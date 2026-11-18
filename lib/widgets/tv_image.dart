@@ -136,9 +136,16 @@ class _TvBackdropState extends State<TvBackdrop> {
         tmdbImageUrl(path, TmdbImageKind.backdrop, physical),
       ),
     );
-    precacheImage(provider, context, onError: (_, __) {}).then((_) {
-      // Skip if focus has already moved on to another title.
-      if (!mounted || _wantedPath != path) return;
+    // precacheImage completes its future on failure too, so record the error
+    // and keep the previous backdrop rather than fading it out to black.
+    var failed = false;
+    precacheImage(
+      provider,
+      context,
+      onError: (_, __) => failed = true,
+    ).then((_) {
+      // Skip if the fetch failed, or focus has moved on to another title.
+      if (failed || !mounted || _wantedPath != path) return;
       setState(() {
         _shown = provider;
         _shownPath = path;
@@ -150,7 +157,7 @@ class _TvBackdropState extends State<TvBackdrop> {
   Widget build(BuildContext context) {
     final shown = _shown;
     return AnimatedSwitcher(
-      duration: const Duration(milliseconds: 450),
+      duration: TvMotion.fade,
       switchInCurve: Curves.easeOut,
       switchOutCurve: Curves.easeIn,
       layoutBuilder:

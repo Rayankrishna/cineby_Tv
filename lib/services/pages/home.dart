@@ -315,7 +315,16 @@ class _MyHomePageState extends State<MyHomePage> {
   /// BACK from anywhere in the rows returns to the hero before the shell
   /// hands focus to the nav bar.
   bool _handleBack() {
-    if (_activeRow.value < 0 || !_playNode.canRequestFocus) return false;
+    // canRequestFocus is true for a node that is not in the tree at all, so
+    // on its own it would claim BACK and then silently do nothing (the hero
+    // only mounts when there is a featured title). parent == null mirrors
+    // FocusNode._doRequestFocus's own early-out, and also stops it latching
+    // _requestFocusWhenReparented.
+    if (_activeRow.value < 0 ||
+        _playNode.parent == null ||
+        !_playNode.canRequestFocus) {
+      return false;
+    }
     _playNode.requestFocus();
     return true;
   }
@@ -347,7 +356,7 @@ class _MyHomePageState extends State<MyHomePage> {
     return true;
   }
 
-  void _openCard(_HomeCard card) {
+  void _openCard(_HomeCard card, {bool autoPlay = false}) {
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -356,6 +365,7 @@ class _MyHomePageState extends State<MyHomePage> {
               movieId: card.tmdbId.toString(),
               mediaType: card.mediaType,
               preview: card.preview,
+              autoPlay: autoPlay,
             ),
       ),
     );
@@ -409,7 +419,9 @@ class _MyHomePageState extends State<MyHomePage> {
           }
 
           _syncRowKeys([for (final r in rows) r.key]);
-          return _buildHome(context, featured, rows);
+          // Read inside the Observer so the autofocus decision re-runs when
+          // the fetch settles, not just when rows change.
+          return _buildHome(context, featured, rows, !_store.isLoading);
         },
       ),
     );
@@ -419,6 +431,7 @@ class _MyHomePageState extends State<MyHomePage> {
     BuildContext context,
     _HomeCard? featured,
     List<_HomeRow> rows,
+    bool settled,
   ) {
     final gutter = kTvGutter.s(context);
 
@@ -466,7 +479,7 @@ class _MyHomePageState extends State<MyHomePage> {
                       playNode: _playNode,
                       browsing: active >= 0,
                       onFocused: _onHeroFocused,
-                      onPlay: () => _openCard(featured),
+                      onPlay: () => _openCard(featured, autoPlay: true),
                     ),
                   ),
             ),
@@ -483,7 +496,12 @@ class _MyHomePageState extends State<MyHomePage> {
             builder:
                 (_, active, child) => TweenAnimationBuilder<double>(
                   tween: Tween<double>(
-                    end: active < 0 ? _featuredShift.s(context) : 0,
+                    // No hero → no gap to leave for it, otherwise the rows
+                    // start a third of the way down an empty screen.
+                    end:
+                        (featured == null || active >= 0)
+                            ? 0
+                            : _featuredShift.s(context),
                   ),
                   duration: const Duration(milliseconds: 340),
                   curve: TvMotion.curve,
@@ -505,6 +523,9 @@ class _MyHomePageState extends State<MyHomePage> {
                     key: ValueKey(rows[i].key),
                     row: rows[i],
                     index: i,
+                    // With no hero nothing else claims the first focus, so
+                    // the page would come up with no ring anywhere.
+                    autofocusFirst: featured == null && settled && i == 0,
                     activeRow: _activeRow,
                     onRowFocused: () => _onRowFocused(rows[i].key),
                     onCardFocused: _onCardFocused,
@@ -686,6 +707,7 @@ class _HomeRowView extends StatelessWidget {
     required this.onCardPressed,
     required this.onGenrePressed,
     required this.onExitTop,
+    this.autofocusFirst = false,
   });
 
   final _HomeRow row;
@@ -699,6 +721,9 @@ class _HomeRowView extends StatelessWidget {
 
   /// Where UP leads from the first row (the hero), if anywhere.
   final VoidCallback? onExitTop;
+
+  /// Take the initial focus, for the hero-less case where nothing else will.
+  final bool autofocusFirst;
 
   static const List<(int, String)> _genres = [
     (28, 'Action'),
@@ -729,6 +754,7 @@ class _HomeRowView extends StatelessWidget {
           // Anime is a TV discover query, not a plain movie genre.
           TvChip(
             label: 'Anime',
+            autofocus: autofocusFirst,
             onPressed:
                 () => onGenrePressed(
                   16,
@@ -748,6 +774,7 @@ class _HomeRowView extends StatelessWidget {
       cardBuilder: (context, i) {
         final card = row.cards[i];
         return TvPosterCard(
+          autofocus: autofocusFirst && i == 0,
           posterPath: card.posterPath,
           title: card.title,
           progress: card.progress,
@@ -766,13 +793,21 @@ class _HomeRowView extends StatelessWidget {
       valueListenable: activeRow,
       // Rows that have scrolled above the focused one fade away rather than
       // being sliced by the top edge of the rows viewport.
-      builder:
-          (_, active, child) => AnimatedOpacity(
-            opacity: index < active ? 0 : 1,
-            duration: const Duration(milliseconds: 200),
-            curve: Curves.easeOut,
-            child: child,
-          ),
+      builder: (_, active, child) {
+        final hidden = index < active;
+        // Dissolving on the way out is deliberate; fading back *in* is not.
+        // A row coming down into focus has to be opaque the frame it takes
+        // focus, or its posters and the focus ring ghost through the whole
+        // scroll, and a held UP steps faster (140ms) than any fade worth
+        // watching, so the top of the screen would never settle. A zero
+        // duration makes AnimatedOpacity jump instead of animate.
+        return AnimatedOpacity(
+          opacity: hidden ? 0 : 1,
+          duration: hidden ? TvMotion.fade : Duration.zero,
+          curve: TvMotion.curve,
+          child: child,
+        );
+      },
       child: TvSection(
         alignment: 0,
         onFocusChange: (focused) {

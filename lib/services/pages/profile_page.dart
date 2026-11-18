@@ -18,12 +18,33 @@ class ProfilePage extends StatefulWidget {
 }
 
 class _ProfilePageState extends State<ProfilePage> {
+  int _sectionMask = 0;
+
   @override
   void initState() {
     super.initState();
     historyStore.fetchContinueWatching();
     historyStore.fetch();
     watchlistStore.fetch();
+  }
+
+  /// The three fetches settle in any order, so a rail can be inserted above
+  /// one the user has already focused. Re-pin it instead of leaving it
+  /// displaced (home.dart does the same for its rows).
+  void _syncSections(int mask) {
+    if (mask == _sectionMask) return;
+    _sectionMask = mask;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final focusContext = FocusManager.instance.primaryFocus?.context;
+      if (focusContext == null || !focusContext.mounted) return;
+      // Profile is kept alive in RootShell's IndexedStack and rebuilds on
+      // another tab's fetches too: only ever re-pin our own focus.
+      if (focusContext.findAncestorStateOfType<_ProfilePageState>() != this) {
+        return;
+      }
+      TvSection.maybeOf(focusContext)?.reveal();
+    });
   }
 
   void _open({
@@ -144,6 +165,12 @@ class _ProfilePageState extends State<ProfilePage> {
           final recent = historyStore.items.take(12).toList();
           final nothingYet =
               continueWatching.isEmpty && watchlist.isEmpty && recent.isEmpty;
+
+          _syncSections(
+            (continueWatching.isNotEmpty ? 1 : 0) |
+                (watchlist.isNotEmpty ? 2 : 0) |
+                (recent.isNotEmpty ? 4 : 0),
+          );
 
           // Padded (not list padding) so rails scroll away under the nav bar's
           // edge instead of sliding behind its labels.
@@ -325,29 +352,28 @@ class _AvatarPickerPageState extends State<AvatarPickerPage> {
     _load();
   }
 
+  Future<List<String>> _peoplePage(int page) async {
+    try {
+      final r = await tmdbDio.get('$popularPeopleUrl$page');
+      return [
+        for (final p in (r.data['results'] as List? ?? []))
+          if (p is Map && p['profile_path'] is String)
+            p['profile_path'] as String,
+      ];
+    } catch (_) {
+      // One page failing must not discard the other page's faces.
+      return const [];
+    }
+  }
+
   Future<void> _load() async {
     if (!_loading) setState(() => _loading = true);
-    try {
-      final results = await Future.wait([
-        tmdbDio.get('${popularPeopleUrl}1'),
-        tmdbDio.get('${popularPeopleUrl}2'),
-      ]);
-      final all = <String>[];
-      for (final r in results) {
-        for (final p in (r.data['results'] as List? ?? [])) {
-          final path = p is Map ? p['profile_path'] : null;
-          if (path is String) all.add(path);
-        }
-      }
-      if (mounted) {
-        setState(() {
-          _paths = all;
-          _loading = false;
-        });
-      }
-    } catch (_) {
-      if (mounted) setState(() => _loading = false);
-    }
+    final pages = await Future.wait([_peoplePage(1), _peoplePage(2)]);
+    if (!mounted) return;
+    setState(() {
+      _paths = [for (final p in pages) ...p];
+      _loading = false;
+    });
   }
 
   @override
@@ -370,6 +396,11 @@ class _AvatarPickerPageState extends State<AvatarPickerPage> {
         ],
       );
     } else {
+      // Start on the avatar in use, not face #1 — the stored one can be gone
+      // from TMDB's popular list, in which case nothing would autofocus.
+      final current = authStore.avatarPath;
+      final currentIndex = current == null ? -1 : _paths.indexOf(current);
+      final startIndex = currentIndex < 0 ? 0 : currentIndex;
       body = GridView.builder(
         padding: EdgeInsets.fromLTRB(
           gutter,
@@ -386,7 +417,7 @@ class _AvatarPickerPageState extends State<AvatarPickerPage> {
         itemBuilder: (context, i) {
           final path = _paths[i];
           return TvFocusable(
-            autofocus: i == 0,
+            autofocus: i == startIndex,
             onPressed: () {
               authStore.setAvatarPath(path);
               Navigator.pop(context);

@@ -97,11 +97,12 @@ class _RootShellState extends State<RootShell>
 
   /// Arrowing across the tabs previews each page, but only once focus rests
   /// on one — otherwise sweeping from Home to Profile would build and fetch
-  /// every page in between.
+  /// every page in between. The dwell has to outlast a deliberate press-to-
+  /// press gap, or ordinary stepping still commits every tab on the way.
   void _onTabFocused(int index) {
     _tabTimer?.cancel();
     if (index == _index) return;
-    _tabTimer = Timer(const Duration(milliseconds: 170), () {
+    _tabTimer = Timer(const Duration(milliseconds: 400), () {
       if (mounted) _selectTab(index);
     });
   }
@@ -145,6 +146,10 @@ class _RootShellState extends State<RootShell>
 
   void _onPopInvoked(bool didPop, Object? result) {
     if (didPop) return;
+    // A tab preview armed by the last arrow press must not land after BACK
+    // has already moved on — otherwise the tab silently changes behind the
+    // exit confirmation.
+    _tabTimer?.cancel();
     if (!_navFocused) {
       // Give the page first refusal (Home returns to its hero), then pull
       // focus up to the nav bar.
@@ -218,7 +223,12 @@ class _RootShellState extends State<RootShell>
                 node: _contentScope,
                 autofocus: true,
                 child: FadeTransition(
-                  opacity: CurveTween(curve: Curves.easeOut).animate(_pageFade),
+                  // Dip rather than cut: stepping across the nav restarts
+                  // this fade mid-flight, and starting from 0 would strobe
+                  // the whole content area to black at every step.
+                  opacity: Tween<double>(begin: 0.62, end: 1.0)
+                      .chain(CurveTween(curve: Curves.easeOut))
+                      .animate(_pageFade),
                   child: IndexedStack(
                     index: _index,
                     sizing: StackFit.expand,

@@ -40,11 +40,18 @@ class MovieDetailsPage extends StatefulWidget {
   final String mediaType; // 'movie' | 'tv'
   final DetailPreview? preview;
 
+  /// Start playing as soon as the details needed to do so have loaded —
+  /// what a button labelled "Play" is expected to do. The page is still the
+  /// route underneath, so BACK out of the player lands here rather than
+  /// throwing the user back to the rail they came from.
+  final bool autoPlay;
+
   const MovieDetailsPage({
     super.key,
     required this.movieId,
     this.mediaType = 'movie',
     this.preview,
+    this.autoPlay = false,
   });
 
   @override
@@ -61,11 +68,19 @@ class _MovieDetailsPageState extends State<MovieDetailsPage> {
 
   HistoryItem? _resume;
   bool _inWatchlist = false;
+  bool _watchlistBusy = false;
   List<SearchResult> _similar = const [];
 
   // Season the user has moved onto but whose episodes aren't requested yet.
   int? _pendingSeason;
   Timer? _seasonTimer;
+
+  /// One-shot, so returning from the player doesn't immediately re-enter it.
+  bool _autoPlayed = false;
+
+  /// A retry fired from the error card: keep that card (and the focused
+  /// Retry button) mounted instead of swapping in the focusless skeleton.
+  bool _retrying = false;
 
   int get _tmdbId => int.tryParse(widget.movieId) ?? 0;
   bool get _isTv => widget.mediaType == 'tv';
@@ -73,12 +88,53 @@ class _MovieDetailsPageState extends State<MovieDetailsPage> {
   @override
   void initState() {
     super.initState();
-    _loadDetails();
-    _refreshResume();
+    final details = _loadDetails();
+    final resume = _refreshResume();
     _loadSimilar();
     watchlistStore.checkContains(_tmdbId, widget.mediaType).then((in_) {
       if (mounted) setState(() => _inWatchlist = in_);
     });
+    if (widget.autoPlay) {
+      // Both, so an auto-start still picks up where the user left off.
+      Future.wait([details, resume]).then((_) => _maybeAutoPlay());
+    }
+  }
+
+  /// Fires once, after the detail fetch settles. If it failed there is
+  /// nothing to play, so the page just stays put showing its error state.
+  void _maybeAutoPlay() {
+    if (!mounted || _autoPlayed) return;
+    _autoPlayed = true;
+    final r = _resume;
+    final resumable = r != null && !r.completed;
+    if (_isTv) {
+      final tv = _tvStore.tvDetail;
+      if (tv == null) return;
+      if (resumable && r.seasonNumber != null && r.episodeNumber != null) {
+        _playEpisode(
+          tv,
+          r.seasonNumber!,
+          r.episodeNumber!,
+          seekTo: r.progressSeconds,
+        );
+        return;
+      }
+      // Finished the last episode watched: start the one the hero's own
+      // button offers, so Play from the billboard and Play on this page
+      // never begin different episodes.
+      final nextUp =
+          (r != null && r.completed)
+              ? _nextEpisodeAfter(tv, r.seasonNumber ?? 1, r.episodeNumber ?? 1)
+              : null;
+      if (nextUp != null) {
+        _playEpisode(tv, nextUp.season, nextUp.episode);
+      } else {
+        _playFirstAvailableEpisode(tv);
+      }
+    } else {
+      if (_movieStore.movieDetails == null) return;
+      _playMovie(seekTo: resumable ? r.progressSeconds : 0);
+    }
   }
 
   @override
@@ -88,11 +144,14 @@ class _MovieDetailsPageState extends State<MovieDetailsPage> {
     super.dispose();
   }
 
-  void _loadDetails() {
-    if (_isTv) {
-      _tvStore.fetchTvDetail(_tmdbId);
-    } else {
-      _movieStore.fetchMovieDetails(widget.movieId);
+  Future<void> _loadDetails({bool keepErrorCard = false}) async {
+    if (keepErrorCard && !_retrying) setState(() => _retrying = true);
+    try {
+      await (_isTv
+          ? _tvStore.fetchTvDetail(_tmdbId)
+          : _movieStore.fetchMovieDetails(widget.movieId));
+    } finally {
+      if (mounted && _retrying) setState(() => _retrying = false);
     }
   }
 
@@ -121,7 +180,24 @@ class _MovieDetailsPageState extends State<MovieDetailsPage> {
       for (final r in items) {
         r.mediaType ??= widget.mediaType;
       }
-      if (mounted) setState(() => _similar = items);
+      if (!mounted || items.isEmpty) return;
+      final wasEmpty = _similar.isEmpty;
+      setState(() => _similar = items);
+      if (!wasEmpty) return;
+      // This rail is inserted above Cast and Genres, so a late arrival
+      // slides whatever holds focus down by its height while the scroll
+      // offset stays put. Re-pin it, the way home does after a late row
+      // appears (see _syncRowKeys).
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        // Still true under a pushed player route, where primaryFocus points
+        // into the other route and revealing would scroll the wrong page.
+        if (ModalRoute.of(context)?.isCurrent != true) return;
+        final focusContext = FocusManager.instance.primaryFocus?.context;
+        if (focusContext != null && focusContext.mounted) {
+          TvSection.maybeOf(focusContext)?.reveal();
+        }
+      });
     } catch (_) {
       // Recommendations are a nice-to-have; the page works without them.
     }
@@ -184,6 +260,9 @@ class _MovieDetailsPageState extends State<MovieDetailsPage> {
   }
 
   Future<void> _toggleWatchlist() async {
+    // A second press while the first is in flight reads the cache the add
+    // already wrote and takes the remove branch, undoing it.
+    if (_watchlistBusy) return;
     String? title, poster;
     if (_isTv) {
       title = _tvStore.tvDetail?.name;
@@ -192,14 +271,27 @@ class _MovieDetailsPageState extends State<MovieDetailsPage> {
       title = _movieStore.movieDetails?.title;
       poster = _movieStore.movieDetails?.posterPath;
     }
-    await watchlistStore.toggle(
-      tmdbId: _tmdbId,
-      mediaType: widget.mediaType,
-      title: title,
-      posterPath: poster,
-    );
-    final now = await watchlistStore.checkContains(_tmdbId, widget.mediaType);
-    if (mounted) setState(() => _inWatchlist = now);
+    // Flip the icon now: adding is two round trips, and this is the one
+    // button on the page that doesn't navigate, so until it flips the press
+    // reads as dead.
+    final next = !_inWatchlist;
+    setState(() {
+      _watchlistBusy = true;
+      _inWatchlist = next;
+    });
+    tvToast(context, next ? 'Added to My List' : 'Removed from My List');
+    try {
+      await watchlistStore.toggle(
+        tmdbId: _tmdbId,
+        mediaType: widget.mediaType,
+        title: title,
+        posterPath: poster,
+      );
+      final now = await watchlistStore.checkContains(_tmdbId, widget.mediaType);
+      if (mounted) setState(() => _inWatchlist = now);
+    } finally {
+      if (mounted) setState(() => _watchlistBusy = false);
+    }
   }
 
   void _selectSeason(TvDetail tv, int seasonNumber, {bool immediate = false}) {
@@ -280,7 +372,9 @@ class _MovieDetailsPageState extends State<MovieDetailsPage> {
 
   Widget _buildMovie() {
     final movie = _movieStore.movieDetails;
-    if (movie == null && !_movieStore.isLoading) return _buildError();
+    if (movie == null && (_retrying || !_movieStore.isLoading)) {
+      return _buildError();
+    }
 
     final preview = widget.preview;
     final cast = <_CastEntry>[
@@ -328,6 +422,7 @@ class _MovieDetailsPageState extends State<MovieDetailsPage> {
                 : [
                   if (canResume) ...[
                     TvButton(
+                      key: const ValueKey('primary-play'),
                       label: 'Resume',
                       subLabel: _formatProgress(resume.progressSeconds),
                       icon: Icons.play_arrow_rounded,
@@ -336,12 +431,14 @@ class _MovieDetailsPageState extends State<MovieDetailsPage> {
                           () => _playMovie(seekTo: resume.progressSeconds),
                     ),
                     TvButton(
+                      key: const ValueKey('play-from-start'),
                       label: 'Play from Start',
                       icon: Icons.replay_rounded,
                       onPressed: _playMovie,
                     ),
                   ] else
                     TvButton(
+                      key: const ValueKey('primary-play'),
                       label: 'Play',
                       icon: Icons.play_arrow_rounded,
                       autofocus: true,
@@ -367,7 +464,9 @@ class _MovieDetailsPageState extends State<MovieDetailsPage> {
 
   Widget _buildTv() {
     final tv = _tvStore.tvDetail;
-    if (tv == null && !_tvStore.isLoading) return _buildError();
+    if (tv == null && (_retrying || !_tvStore.isLoading)) {
+      return _buildError();
+    }
 
     final preview = widget.preview;
     final cast = <_CastEntry>[
@@ -383,6 +482,17 @@ class _MovieDetailsPageState extends State<MovieDetailsPage> {
     final seasons = tv?.numberOfSeasons;
     final year = _year(tv?.firstAirDate) ?? preview?.year;
     final resume = _resume;
+    final canResume = resume != null && !resume.completed;
+    // Finished the episode they were on: offer the next one rather than
+    // dropping them back at the premiere.
+    final nextUp =
+        tv != null && resume != null && resume.completed
+            ? _nextEpisodeAfter(
+              tv,
+              resume.seasonNumber ?? 1,
+              resume.episodeNumber ?? 1,
+            )
+            : null;
 
     return _buildPage(
       backdropPath: tv?.backdropPath ?? preview?.backdropPath,
@@ -406,8 +516,9 @@ class _MovieDetailsPageState extends State<MovieDetailsPage> {
             tv == null
                 ? null
                 : [
-                  if (resume != null) ...[
+                  if (canResume) ...[
                     TvButton(
+                      key: const ValueKey('primary-play'),
                       label: 'Resume',
                       subLabel:
                           'S${resume.seasonNumber ?? 1} · E${resume.episodeNumber ?? 1}'
@@ -423,12 +534,24 @@ class _MovieDetailsPageState extends State<MovieDetailsPage> {
                           ),
                     ),
                     TvButton(
+                      key: const ValueKey('play-from-start'),
                       label: 'Play from Start',
                       icon: Icons.replay_rounded,
                       onPressed: () => _playFirstAvailableEpisode(tv),
                     ),
-                  ] else
+                  ] else if (nextUp != null)
                     TvButton(
+                      key: const ValueKey('primary-play'),
+                      label: 'Play',
+                      subLabel: 'S${nextUp.season} · E${nextUp.episode}',
+                      icon: Icons.play_arrow_rounded,
+                      autofocus: true,
+                      onPressed:
+                          () => _playEpisode(tv, nextUp.season, nextUp.episode),
+                    )
+                  else
+                    TvButton(
+                      key: const ValueKey('primary-play'),
                       label: 'Play',
                       subLabel: 'S1 · E1',
                       icon: Icons.play_arrow_rounded,
@@ -465,6 +588,49 @@ class _MovieDetailsPageState extends State<MovieDetailsPage> {
     );
   }
 
+  /// The episode after [season]/[episode]. Prefers the season already
+  /// loaded (it knows what has actually aired); otherwise falls back to
+  /// TMDB's episode_count on the season summary.
+  ({int season, int episode})? _nextEpisodeAfter(
+    TvDetail tv,
+    int season,
+    int episode,
+  ) {
+    // Season metadata is authoritative. Deciding from the *currently loaded*
+    // season instead would do two wrong things: a finale would find no
+    // "episode + 1" and fall back to the premiere, and the answer would
+    // change as focus moved across the season chips (which load seasons),
+    // silently retargeting the hero's primary button.
+    for (var i = 0; i < tv.seasons.length; i++) {
+      final s = tv.seasons[i];
+      if (s.seasonNumber != season) continue;
+      final count = s.episodeCount ?? 0;
+      final next =
+          (count == 0 || episode < count)
+              ? (season: season, episode: episode + 1)
+              : (i + 1 < tv.seasons.length
+                  ? (season: tv.seasons[i + 1].seasonNumber, episode: 1)
+                  : null);
+      if (next == null) return null;
+      // Only suppress it when we positively know it has not aired yet.
+      return _hasAired(next) == false ? null : next;
+    }
+    return null;
+  }
+
+  /// Whether [target] has aired. null when that season's episode list is not
+  /// loaded, i.e. we cannot tell — callers treat that as "offer it".
+  bool? _hasAired(({int season, int episode}) target) {
+    final loaded = _tvStore.selectedSeason;
+    if (loaded == null || loaded.seasonNumber != target.season) return null;
+    for (final e in loaded.episodes) {
+      if (e.episodeNumber != target.episode) continue;
+      final aired = DateTime.tryParse(e.airDate ?? '');
+      return aired != null && !aired.isAfter(DateTime.now());
+    }
+    return false;
+  }
+
   /// Resume an episode from where it was left only if it is the one the
   /// history entry points at.
   int _resumePointFor(Episode e) {
@@ -478,6 +644,7 @@ class _MovieDetailsPageState extends State<MovieDetailsPage> {
   }
 
   Widget _watchlistButton() => TvButton(
+    key: const ValueKey('watchlist'),
     label: 'My List',
     icon: _inWatchlist ? Icons.check_rounded : Icons.add_rounded,
     onPressed: _toggleWatchlist,
@@ -600,10 +767,11 @@ class _MovieDetailsPageState extends State<MovieDetailsPage> {
       detail: 'The source may be busy — try again.',
       actions: [
         TvButton(
-          label: 'Retry',
+          label: _retrying ? 'Retrying…' : 'Retry',
           icon: Icons.refresh_rounded,
           autofocus: true,
-          onPressed: _loadDetails,
+          onPressed:
+              _retrying ? () {} : () => _loadDetails(keepErrorCard: true),
         ),
         TvButton(
           label: 'Go Back',
@@ -756,20 +924,31 @@ class _DetailHero extends StatelessWidget {
               ],
               SizedBox(height: 18.s(context)),
               if (actions == null)
-                TvPulse(
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      TvSkeletonBox(
-                        width: 96.s(context),
-                        height: 36.s(context),
-                      ),
-                      SizedBox(width: 10.s(context)),
-                      TvSkeletonBox(
-                        width: 110.s(context),
-                        height: 36.s(context),
-                      ),
-                    ],
+                // A route with nothing focusable swallows the remote, so the
+                // loading hero keeps a placeholder in the ring until the real
+                // actions replace it and take the focus back.
+                // A route with nothing focusable swallows the remote, so the
+                // skeleton itself holds the focus until the real actions
+                // mount and take it back. Deliberately a bare Focus and not a
+                // TvButton: a solid-white "Play" that does nothing when
+                // pressed is worse than a dead D-pad.
+                Focus(
+                  autofocus: true,
+                  child: TvPulse(
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        TvSkeletonBox(
+                          width: 96.s(context),
+                          height: 36.s(context),
+                        ),
+                        SizedBox(width: 10.s(context)),
+                        TvSkeletonBox(
+                          width: 110.s(context),
+                          height: 36.s(context),
+                        ),
+                      ],
+                    ),
                   ),
                 )
               else
@@ -848,7 +1027,7 @@ class _QualityTag extends StatelessWidget {
 const double _episodeWidth = 196;
 const double _episodeGap = 14;
 
-class _EpisodesSection extends StatelessWidget {
+class _EpisodesSection extends StatefulWidget {
   const _EpisodesSection({
     super.key,
     required this.store,
@@ -868,14 +1047,49 @@ class _EpisodesSection extends StatelessWidget {
   final ValueChanged<int> onSeasonPressed;
   final ValueChanged<Episode> onPlay;
 
+  @override
+  State<_EpisodesSection> createState() => _EpisodesSectionState();
+}
+
+class _EpisodesSectionState extends State<_EpisodesSection> {
   static double _railHeight(BuildContext context) => 212.s(context);
+
+  /// Wraps the episode rail and OUTLIVES it. The rail itself is keyed by
+  /// season, so when a new season's payload lands the whole subtree — and
+  /// every episode FocusNode in it — is replaced; this node is what lets us
+  /// notice that focus was inside at the time and put it back.
+  final FocusNode _rail = FocusNode(
+    debugLabel: 'episodeRail',
+    skipTraversal: true,
+    canRequestFocus: false,
+  );
+  int? _builtSeason;
+
+  @override
+  void dispose() {
+    _rail.dispose();
+    super.dispose();
+  }
+
+  void _refocusRailNextFrame() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      for (final node in _rail.traversalDescendants) {
+        if (node.canRequestFocus) {
+          node.requestFocus();
+          return;
+        }
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     return Observer(
       builder: (_) {
-        final selected = pendingSeason ?? store.selectedSeasonNumber;
-        final single = tv.seasons.length == 1;
+        final selected =
+            widget.pendingSeason ?? widget.store.selectedSeasonNumber;
+        final single = widget.tv.seasons.length == 1;
         return TvSection(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -885,22 +1099,22 @@ class _EpisodesSection extends StatelessWidget {
                 title: 'Episodes',
                 trailing:
                     single
-                        ? (tv.seasons.first.name ??
-                            'Season ${tv.seasons.first.seasonNumber}')
+                        ? (widget.tv.seasons.first.name ??
+                            'Season ${widget.tv.seasons.first.seasonNumber}')
                         : null,
               ),
-              if (tv.seasons.length > 1)
+              if (widget.tv.seasons.length > 1)
                 TvFlowRail(
                   height: 48.s(context),
                   children: [
-                    for (final s in tv.seasons)
+                    for (final s in widget.tv.seasons)
                       TvChip(
                         label: s.name ?? 'Season ${s.seasonNumber}',
                         selected: s.seasonNumber == selected,
                         onFocusChange: (f) {
-                          if (f) onSeasonFocused(s.seasonNumber);
+                          if (f) widget.onSeasonFocused(s.seasonNumber);
                         },
-                        onPressed: () => onSeasonPressed(s.seasonNumber),
+                        onPressed: () => widget.onSeasonPressed(s.seasonNumber),
                       ),
                   ],
                 ),
@@ -914,9 +1128,9 @@ class _EpisodesSection extends StatelessWidget {
 
   Widget _buildEpisodes(BuildContext context) {
     final height = _railHeight(context);
-    final season = store.selectedSeason;
+    final season = widget.store.selectedSeason;
     if (season == null) {
-      if (!store.isSeasonLoading && !store.isLoading) {
+      if (!widget.store.isSeasonLoading && !widget.store.isLoading) {
         return _note(context, height, "Couldn't load episodes");
       }
       return SizedBox(height: height, child: const _EpisodesSkeleton());
@@ -933,36 +1147,51 @@ class _EpisodesSection extends StatelessWidget {
 
     // Still showing the previous season while the newly picked one loads.
     final stale =
-        store.isSeasonLoading ||
-        pendingSeason != null && pendingSeason != season.seasonNumber;
+        widget.store.isSeasonLoading ||
+        widget.pendingSeason != null &&
+            widget.pendingSeason != season.seasonNumber;
 
     if (episodes.isEmpty) {
       return _note(context, height, 'No episodes have aired yet');
     }
-    final r = resume;
+    final r = widget.resume;
+    // Focus was in the rail we are about to replace — restore it once the
+    // new season's cards exist, otherwise the highlight is thrown back up to
+    // the season chips (or Play) mid-browse.
+    if (_builtSeason != null &&
+        _builtSeason != season.seasonNumber &&
+        _rail.hasFocus) {
+      _refocusRailNextFrame();
+    }
+    _builtSeason = season.seasonNumber;
     return AnimatedOpacity(
       opacity: stale ? 0.35 : 1,
       duration: TvMotion.focus,
-      child: TvFadeIn(
-        key: ValueKey(season.seasonNumber),
-        child: TvRail(
-          storageId: 'episodes-${tv.id}-${season.seasonNumber}',
-          itemCount: episodes.length,
-          itemExtent: (_episodeWidth + _episodeGap).s(context),
-          height: height,
-          itemBuilder: (context, i) {
-            final e = episodes[i];
-            final inProgress =
-                r != null &&
-                !r.completed &&
-                r.seasonNumber == e.seasonNumber &&
-                r.episodeNumber == e.episodeNumber;
-            return _EpisodeCard(
-              episode: e,
-              progress: inProgress ? r.progressFraction : null,
-              onPressed: () => onPlay(e),
-            );
-          },
+      child: Focus(
+        focusNode: _rail,
+        canRequestFocus: false,
+        skipTraversal: true,
+        child: TvFadeIn(
+          key: ValueKey(season.seasonNumber),
+          child: TvRail(
+            storageId: 'episodes-${widget.tv.id}-${season.seasonNumber}',
+            itemCount: episodes.length,
+            itemExtent: (_episodeWidth + _episodeGap).s(context),
+            height: height,
+            itemBuilder: (context, i) {
+              final e = episodes[i];
+              final inProgress =
+                  r != null &&
+                  !r.completed &&
+                  r.seasonNumber == e.seasonNumber &&
+                  r.episodeNumber == e.episodeNumber;
+              return _EpisodeCard(
+                episode: e,
+                progress: inProgress ? r.progressFraction : null,
+                onPressed: () => widget.onPlay(e),
+              );
+            },
+          ),
         ),
       ),
     );
@@ -1035,8 +1264,11 @@ class _EpisodeCard extends StatelessWidget {
                           ),
                         ),
                       ),
-                      if (focused)
-                        Center(
+                      Center(
+                        child: AnimatedOpacity(
+                          opacity: focused ? 1 : 0,
+                          duration: TvMotion.focus,
+                          curve: TvMotion.curve,
                           child: Container(
                             width: 34.s(context),
                             height: 34.s(context),
@@ -1055,6 +1287,7 @@ class _EpisodeCard extends StatelessWidget {
                             ),
                           ),
                         ),
+                      ),
                       if (progress != null && progress! > 0)
                         Positioned(
                           left: 0,

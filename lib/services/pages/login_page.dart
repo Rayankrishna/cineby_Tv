@@ -1,6 +1,8 @@
 import 'package:cineby_tv/services/config.dart';
 import 'package:cineby_tv/stores/auth_store.dart';
 import 'package:cineby_tv/utils/tv_scale.dart';
+import 'package:cineby_tv/widgets/tv_focus.dart';
+import 'package:cineby_tv/widgets/tv_widgets.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_mobx/flutter_mobx.dart';
@@ -21,6 +23,7 @@ class _LoginPageState extends State<LoginPage> {
   String _email = '';
   String _password = '';
   _ActiveField _active = _ActiveField.email;
+  DateTime? _lastBack;
   bool _shift = true;
   bool _symbols = false;
 
@@ -84,15 +87,36 @@ class _LoginPageState extends State<LoginPage> {
 
   void _showError() {
     final msg = widget.authStore.errorMessage ?? 'Failed';
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(msg), backgroundColor: kNetflixRed),
-    );
+    tvToast(context, msg);
+  }
+
+  void _onPopInvoked(bool didPop, Object? result) {
+    if (didPop) return;
+    if (_isRegister) {
+      // BACK first leaves the register sub-form, matching "BACK undoes the
+      // last step" everywhere else in the app.
+      setState(() {
+        _isRegister = false;
+        if (_active == _ActiveField.name) _active = _ActiveField.email;
+      });
+      return;
+    }
+    // Confirm exit on a second press, same as RootShell.
+    final now = DateTime.now();
+    if (_lastBack != null &&
+        now.difference(_lastBack!) < const Duration(seconds: 2)) {
+      SystemNavigator.pop();
+      return;
+    }
+    _lastBack = now;
+    tvToast(context, 'Press back again to exit');
   }
 
   @override
   Widget build(BuildContext context) {
     return PopScope(
       canPop: false,
+      onPopInvokedWithResult: _onPopInvoked,
       child: Scaffold(
         backgroundColor: kDeepBlack,
         body: Stack(
@@ -175,6 +199,7 @@ class _LoginPageState extends State<LoginPage> {
         SizedBox(height: 28.s(context)),
         if (_isRegister) ...[
           _Field(
+            key: const ValueKey('field-name'),
             label: 'Name',
             icon: Icons.person_outline,
             value: _name,
@@ -185,6 +210,7 @@ class _LoginPageState extends State<LoginPage> {
           SizedBox(height: 12.s(context)),
         ],
         _Field(
+          key: const ValueKey('field-email'),
           label: 'Email',
           icon: Icons.email_outlined,
           value: _email,
@@ -194,6 +220,7 @@ class _LoginPageState extends State<LoginPage> {
         ),
         SizedBox(height: 12.s(context)),
         _Field(
+          key: const ValueKey('field-password'),
           label: 'Password',
           icon: Icons.lock_outline,
           value: _password,
@@ -357,6 +384,7 @@ class _Field extends StatelessWidget {
   final VoidCallback onFocus;
 
   const _Field({
+    super.key,
     required this.label,
     required this.icon,
     required this.value,
@@ -455,10 +483,7 @@ class _KeyTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return Focus(
       onKeyEvent: (n, e) {
-        if (e is KeyDownEvent &&
-            (e.logicalKey == LogicalKeyboardKey.select ||
-                e.logicalKey == LogicalKeyboardKey.enter ||
-                e.logicalKey == LogicalKeyboardKey.space)) {
+        if (e is KeyDownEvent && tvIsSelectKey(e.logicalKey)) {
           onPressed();
           return KeyEventResult.handled;
         }
@@ -508,10 +533,7 @@ class _PrimaryButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return Focus(
       onKeyEvent: (n, e) {
-        if (e is KeyDownEvent &&
-            (e.logicalKey == LogicalKeyboardKey.select ||
-                e.logicalKey == LogicalKeyboardKey.enter ||
-                e.logicalKey == LogicalKeyboardKey.space)) {
+        if (e is KeyDownEvent && tvIsSelectKey(e.logicalKey)) {
           onPressed?.call();
           return KeyEventResult.handled;
         }
@@ -560,10 +582,7 @@ class _TextButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return Focus(
       onKeyEvent: (n, e) {
-        if (e is KeyDownEvent &&
-            (e.logicalKey == LogicalKeyboardKey.select ||
-                e.logicalKey == LogicalKeyboardKey.enter ||
-                e.logicalKey == LogicalKeyboardKey.space)) {
+        if (e is KeyDownEvent && tvIsSelectKey(e.logicalKey)) {
           onPressed();
           return KeyEventResult.handled;
         }

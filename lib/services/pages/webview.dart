@@ -12,7 +12,8 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 /// EVERY provider at once (headless) and hands off to the native player with
 /// whichever returns a stream first — the losing extractors are torn down.
 class MyWidget extends StatefulWidget {
-  final String? url; // ignored when tmdbId is present (kept for call-site compat)
+  final String?
+  url; // ignored when tmdbId is present (kept for call-site compat)
   final String? title;
   final int? tmdbId;
   final String mediaType;
@@ -25,9 +26,15 @@ class MyWidget extends StatefulWidget {
   // IMDb id (from the TMDB detail response) — used for YIFY subtitles.
   final String? imdbId;
 
+  /// Extract from this provider only, instead of racing them all. Set when
+  /// the user picks a source in the player; `null` means Auto (race).
+  /// Falls back to a full race if the chosen provider yields nothing.
+  final StreamServer? forcedServer;
+
   const MyWidget({
     super.key,
     this.url,
+    this.forcedServer,
     this.title,
     this.tmdbId,
     this.mediaType = 'movie',
@@ -49,6 +56,16 @@ class _MyWidgetState extends State<MyWidget> {
   bool _failed = false;
   bool _handedOff = false;
 
+  /// The pinned provider actually in use — from [MyWidget.forcedServer] or,
+  /// on a normal Play, from the choice saved in a previous session. Drives
+  /// the prep card's copy so a pin never looks like it was ignored.
+  String? _pinnedSource;
+
+  /// Live extractors for the race in flight, so backing out of this page
+  /// tears down their headless webviews instead of letting five of them run
+  /// on for the rest of the timeout.
+  final List<StreamExtractionHandle> _handles = [];
+
   @override
   void initState() {
     super.initState();
@@ -68,21 +85,60 @@ class _MyWidgetState extends State<MyWidget> {
     if (!_handedOff) {
       WakelockPlus.disable();
     }
+    // Only a handoff leaves a winner worth keeping; every other exit (BACK,
+    // Try again) should stop the extractors now.
+    if (!_handedOff) {
+      for (final h in _handles) {
+        h.cancel();
+      }
+    }
+    _handles.clear();
     super.dispose();
   }
 
   Future<void> _startRace() async {
+    for (final h in _handles) {
+      h.cancel();
+    }
+    _handles.clear();
     setState(() {
       _racing = true;
       _failed = false;
     });
-    final raced = await raceServersForStream(
+    // An explicit pick (this playback, or one saved from a previous session)
+    // wins over the race; Auto races every provider as before.
+    final chosen = widget.forcedServer ?? await loadSelectedServer();
+    if (!mounted || _handedOff) return;
+    if (chosen != null) setState(() => _pinnedSource = chosen.name);
+    var raced = await raceServersForStream(
       tmdbId: widget.tmdbId!,
       mediaType: widget.mediaType,
       seasonNumber: widget.seasonNumber,
       episodeNumber: widget.episodeNumber,
+      servers: chosen == null ? null : [chosen],
+      // Give up on a single pinned provider well before the full-race budget:
+      // a stale pin otherwise doubles time-to-play before the fallback starts.
+      timeout:
+          chosen == null
+              ? const Duration(seconds: 45)
+              : const Duration(seconds: 15),
+      outHandles: _handles,
     );
     if (!mounted || _handedOff) return;
+    // The chosen provider had nothing for this title — rather than dead-end,
+    // fall back to the full race so playback still starts.
+    if (raced == null && chosen != null) {
+      // Pinned provider came up empty — say so while the full race runs.
+      setState(() => _pinnedSource = null);
+      raced = await raceServersForStream(
+        tmdbId: widget.tmdbId!,
+        mediaType: widget.mediaType,
+        seasonNumber: widget.seasonNumber,
+        episodeNumber: widget.episodeNumber,
+        outHandles: _handles,
+      );
+      if (!mounted || _handedOff) return;
+    }
     if (raced == null) {
       setState(() {
         _racing = false;
@@ -98,20 +154,22 @@ class _MyWidgetState extends State<MyWidget> {
     _handedOff = true;
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
-        builder: (_) => NativePlayerPage(
-          videoUrl: raced.stream.videoUrl,
-          httpHeaders: raced.stream.headers,
-          subtitleUrl: raced.stream.subtitleUrl,
-          imdbId: widget.imdbId,
-          title: widget.title,
-          tmdbId: widget.tmdbId,
-          mediaType: widget.mediaType,
-          seasonNumber: widget.seasonNumber,
-          episodeNumber: widget.episodeNumber,
-          initialProgressSeconds: widget.initialProgressSeconds,
-          posterPath: widget.posterPath,
-          backdropPath: widget.backdropPath,
-        ),
+        builder:
+            (_) => NativePlayerPage(
+              videoUrl: raced.stream.videoUrl,
+              httpHeaders: raced.stream.headers,
+              subtitleUrl: raced.stream.subtitleUrl,
+              sourceName: raced.server.name,
+              imdbId: widget.imdbId,
+              title: widget.title,
+              tmdbId: widget.tmdbId,
+              mediaType: widget.mediaType,
+              seasonNumber: widget.seasonNumber,
+              episodeNumber: widget.episodeNumber,
+              initialProgressSeconds: widget.initialProgressSeconds,
+              posterPath: widget.posterPath,
+              backdropPath: widget.backdropPath,
+            ),
       ),
     );
   }
@@ -127,11 +185,20 @@ class _MyWidgetState extends State<MyWidget> {
             // Backdrop or solid black behind the prep card.
             if ((widget.backdropPath ?? widget.posterPath) != null)
               ColorFiltered(
-                colorFilter:
-                    const ColorFilter.mode(Colors.black54, BlendMode.darken),
+                colorFilter: const ColorFilter.mode(
+                  Colors.black54,
+                  BlendMode.darken,
+                ),
                 child: Image.network(
-                  '$imgOriginal${widget.backdropPath ?? widget.posterPath}',
+                  '$imgW500${widget.backdropPath ?? widget.posterPath}',
                   fit: BoxFit.cover,
+                  // Decoded at screen width, not the multi-MB original: this
+                  // card is on screen for a second while extraction runs.
+                  cacheWidth:
+                      (MediaQuery.sizeOf(context).width *
+                              MediaQuery.devicePixelRatioOf(context))
+                          .round(),
+                  errorBuilder: (_, __, ___) => Container(color: kDeepBlack),
                 ),
               )
             else
@@ -148,13 +215,18 @@ class _MyWidgetState extends State<MyWidget> {
               ),
             ),
             Center(
-              child: _failed
-                  ? _FailureCard(
-                      title: widget.title,
-                      onRetry: _startRace,
-                      onCancel: () => Navigator.of(context).maybePop(),
-                    )
-                  : _LoadingCard(title: widget.title, racing: _racing),
+              child:
+                  _failed
+                      ? _FailureCard(
+                        title: widget.title,
+                        onRetry: _startRace,
+                        onCancel: () => Navigator.of(context).maybePop(),
+                      )
+                      : _LoadingCard(
+                        title: widget.title,
+                        racing: _racing,
+                        sourceName: _pinnedSource,
+                      ),
             ),
           ],
         ),
@@ -166,7 +238,14 @@ class _MyWidgetState extends State<MyWidget> {
 class _LoadingCard extends StatelessWidget {
   final String? title;
   final bool racing;
-  const _LoadingCard({required this.title, required this.racing});
+
+  /// The pinned provider, when the user chose one; null means Auto.
+  final String? sourceName;
+  const _LoadingCard({
+    required this.title,
+    required this.racing,
+    this.sourceName,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -191,14 +270,19 @@ class _LoadingCard extends StatelessWidget {
             fontWeight: FontWeight.w800,
             shadows: [
               Shadow(
-                  color: Colors.black.withOpacity(0.6),
-                  blurRadius: 10.s(context)),
+                color: Colors.black.withValues(alpha: 0.6),
+                blurRadius: 10.s(context),
+              ),
             ],
           ),
         ),
         SizedBox(height: 8.s(context)),
         Text(
-          'Finding the best source',
+          // Naming the provider matters once the user has pinned one: the
+          // generic copy made a deliberate switch look like it was ignored.
+          sourceName == null
+              ? 'Finding the best source'
+              : 'Loading $sourceName',
           textAlign: TextAlign.center,
           style: TextStyle(color: Colors.white70, fontSize: 14.s(context)),
         ),
@@ -224,7 +308,7 @@ class _FailureCard extends StatelessWidget {
       padding: EdgeInsets.all(32.s(context)),
       constraints: BoxConstraints(maxWidth: 560.s(context)),
       decoration: BoxDecoration(
-        color: kSurfaceGrey.withOpacity(0.92),
+        color: kSurfaceGrey.withValues(alpha: 0.92),
         borderRadius: BorderRadius.circular(12.s(context)),
         border: Border.all(color: Colors.white12),
       ),
@@ -305,42 +389,51 @@ class _OverlayButton extends StatelessWidget {
         }
         return KeyEventResult.ignored;
       },
-      child: Builder(builder: (ctx) {
-        final focused = Focus.of(ctx).hasFocus;
-        return GestureDetector(
-          onTap: onPressed,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 120),
-            padding: EdgeInsets.symmetric(
-              horizontal: 22.s(context),
-              vertical: 12.s(context),
-            ),
-            decoration: BoxDecoration(
-              color: isPrimary
-                  ? (focused ? Colors.white : Colors.white.withOpacity(0.92))
-                  : (focused ? Colors.white24 : Colors.white.withOpacity(0.12)),
-              borderRadius: BorderRadius.circular(4.s(context)),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(icon,
+      child: Builder(
+        builder: (ctx) {
+          final focused = Focus.of(ctx).hasFocus;
+          return GestureDetector(
+            onTap: onPressed,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 120),
+              padding: EdgeInsets.symmetric(
+                horizontal: 22.s(context),
+                vertical: 12.s(context),
+              ),
+              decoration: BoxDecoration(
+                color:
+                    isPrimary
+                        ? (focused
+                            ? Colors.white
+                            : Colors.white.withValues(alpha: 0.92))
+                        : (focused
+                            ? Colors.white24
+                            : Colors.white.withValues(alpha: 0.12)),
+                borderRadius: BorderRadius.circular(4.s(context)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    icon,
                     color: isPrimary ? Colors.black : Colors.white,
-                    size: 20.s(context)),
-                SizedBox(width: 8.s(context)),
-                Text(
-                  label,
-                  style: TextStyle(
-                    color: isPrimary ? Colors.black : Colors.white,
-                    fontSize: 14.s(context),
-                    fontWeight: FontWeight.w700,
+                    size: 20.s(context),
                   ),
-                ),
-              ],
+                  SizedBox(width: 8.s(context)),
+                  Text(
+                    label,
+                    style: TextStyle(
+                      color: isPrimary ? Colors.black : Colors.white,
+                      fontSize: 14.s(context),
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-        );
-      }),
+          );
+        },
+      ),
     );
   }
 }

@@ -4,4 +4,16 @@
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Impeller-Vulkan crashes on the Android TV AVD's emulated GPU
+         (SurfaceSyncGroup timeout → the emulator dies), so debug and profile
+         builds run on the legacy Skia/OpenGL backend. This override lives in
+         the debug/profile source sets ONLY: release builds ship with Impeller,
+         which is what real TV hardware wants — it precompiles shaders and so
+         avoids the first-play stutter Skia has, and Flutter is removing the
+         opt-out entirely. -->
+    <application>
+        <meta-data
+            android:name="io.flutter.embedding.android.EnableImpeller"
+            android:value="false" />
+    </application>
 </manifest>

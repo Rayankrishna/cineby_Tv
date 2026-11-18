@@ -299,6 +299,10 @@ Future<RacedStream?> raceServersForStream({
   int? episodeNumber,
   List<StreamServer>? servers,
   Duration timeout = const Duration(seconds: 45),
+  /// Filled with one handle per provider as the race starts, so a caller that
+  /// goes away can abort the extractors instead of leaving a headless webview
+  /// per provider chewing CPU until it times out.
+  List<StreamExtractionHandle>? outHandles,
 }) async {
   if (kIsWeb || !Platform.isAndroid) return null;
   final list = servers ?? streamServers;
@@ -327,6 +331,7 @@ Future<RacedStream?> raceServersForStream({
   for (final server in list) {
     final handle = StreamExtractionHandle();
     handles.add(handle);
+    outHandles?.add(handle);
     final embedUrl =
         server.buildUrl(tmdbId, mediaType, seasonNumber, episodeNumber);
     // Fire-and-forget; results funnel through onSettled.
